@@ -128,6 +128,19 @@ async function useEnglish(): Promise<void> {
 }
 
 /**
+ * Zoom the wall with Ctrl+wheel.
+ *
+ * A bare wheel pans now, matching every other viewer; zooming needs the
+ * modifier. Playwright's `mouse.wheel` cannot set `ctrlKey`, so the keyboard is
+ * held around the scroll.
+ */
+async function zoomWall(deltaY: number): Promise<void> {
+  await page.keyboard.down('Control')
+  await page.mouse.wheel(0, deltaY)
+  await page.keyboard.up('Control')
+}
+
+/**
  * Open a specific photo by file-name fragment.
  *
  * Viewer tests need a known photo rather than "whatever is first": the wall is
@@ -311,7 +324,7 @@ test('zooms with the wheel and pans by dragging', async () => {
   const before = await world.evaluate((el: HTMLElement) => el.style.transform)
 
   await page.mouse.move(600, 400)
-  await page.mouse.wheel(0, -400)
+  await zoomWall(-400)
   await expect.poll(async () => world.evaluate((el: HTMLElement) => el.style.transform)).not.toBe(before)
 
   const afterZoom = await world.evaluate((el: HTMLElement) => el.style.transform)
@@ -319,7 +332,7 @@ test('zooms with the wheel and pans by dragging', async () => {
   // Zoom in again, so the wall is larger than the window on both axes and the
   // drag below has somewhere to go. With only three photos the wall fits
   // vertically after a single zoom step, and the bounds then correctly pin it.
-  await page.mouse.wheel(0, -600)
+  await zoomWall(-600)
   await page.waitForTimeout(500)
 
   await page.mouse.move(600, 400)
@@ -342,7 +355,7 @@ test('pans the wall with the arrow keys', async () => {
 
   const stage = (await page.getByTestId('stage').boundingBox())!
   await page.mouse.move(stage.x + stage.width / 2, stage.y + stage.height / 2)
-  for (let i = 0; i < 3; i += 1) await page.mouse.wheel(0, -400)
+  for (let i = 0; i < 3; i += 1) await zoomWall(-400)
   await page.waitForTimeout(700)
 
   const yOf = () =>
@@ -389,7 +402,7 @@ test('arrow keys pan the wall even after a photo has been viewed', async () => {
   // key press correctly does nothing.
   const stage = (await page.getByTestId('stage').boundingBox())!
   await page.mouse.move(stage.x + stage.width / 2, stage.y + stage.height / 2)
-  for (let i = 0; i < 3; i += 1) await page.mouse.wheel(0, -400)
+  for (let i = 0; i < 3; i += 1) await zoomWall(-400)
   await page.waitForTimeout(700)
 
   const world = page.locator('[data-testid="world"]')
@@ -447,7 +460,7 @@ test('zooming out does not jump back to the first photo', async () => {
   const bar = page.getByTestId('wall-scrollbar')
 
   await page.mouse.move(stage.x + stage.width / 2, stage.y + stage.height / 2)
-  for (let i = 0; i < 3; i += 1) await page.mouse.wheel(0, -400)
+  for (let i = 0; i < 3; i += 1) await zoomWall(-400)
   await page.waitForTimeout(700)
   await expect(bar).toBeVisible()
 
@@ -487,7 +500,7 @@ test('zooming out does not jump back to the first photo', async () => {
   // like a brand-new wall to the fit logic, which snapped the view to the top -
   // experienced as being thrown back to the first photo.
   await page.mouse.move(stage.x + stage.width / 2, stage.y + stage.height / 2)
-  await page.mouse.wheel(0, 300)
+  await zoomWall(300)
   await page.waitForTimeout(700)
 
   // Still deep in the library, not back at the top.
@@ -631,7 +644,7 @@ test('zooms and pans inside the viewer', async () => {
   // Wheel in: the image must actually scale up.
   const box = (await stage.boundingBox())!
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
-  await page.mouse.wheel(0, -400)
+  await zoomWall(-400)
   await expect.poll(transformOf).toContain('scale(')
 
   // Drag: the image must move, and the viewer must NOT close (a pan is not a

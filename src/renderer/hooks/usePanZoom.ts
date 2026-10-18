@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { isClickGesture, pushSample, type GestureStart, type VelocitySample } from '@shared/gesture'
 import { panBy, zoomByWheel, type Transform } from '@shared/transform'
+import { wheelIntent, wheelPan } from '@shared/wheel'
 
 export interface PanZoomHandlers {
   onPointerDown: (event: React.PointerEvent) => void
@@ -130,12 +131,30 @@ export function usePanZoom(
   // A non-passive listener is required: React's synthetic wheel handler is
   // passive, so `preventDefault` there would be ignored and the page would
   // scroll behind the wall.
+  //
+  // A bare wheel pans and Ctrl/Cmd+wheel zooms, matching every other viewer.
+  // Zooming on an unmodified wheel meant the first gesture most people try —
+  // scroll down — changed the magnifications instead of moving through the
+  // library.
   useEffect(() => {
     const target = wheelTarget ?? window
     const handler = (event: Event): void => {
       const wheel = event as WheelEvent
+      // Chromium turns Ctrl+wheel into a page-zoom gesture; preventing the
+      // default here is what keeps the app itself from scaling.
       wheel.preventDefault()
-      setTransform((previous) => zoomByWheel(previous, wheel.deltaY, wheel.deltaMode, wheel.clientX, wheel.clientY))
+
+      if (wheelIntent(wheel) === 'zoom') {
+        setTransform((previous) =>
+          zoomByWheel(previous, wheel.deltaY, wheel.deltaMode, wheel.clientX, wheel.clientY)
+        )
+        return
+      }
+
+      // Panning does not need the pointer position: a scroll moves everything by
+      // the same amount.
+      const { dx, dy } = wheelPan(wheel.deltaX, wheel.deltaY, wheel.deltaMode)
+      setTransform((previous) => panBy(previous, dx, dy))
     }
     target.addEventListener('wheel', handler, { passive: false })
     return () => target.removeEventListener('wheel', handler)

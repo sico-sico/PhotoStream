@@ -218,19 +218,32 @@ describe('usePanZoom', () => {
     })
   })
 
-  describe('wheel zoom', () => {
-    it('zooms in on wheel up', () => {
+  describe('wheel zoom (Ctrl held)', () => {
+    it('zooms in on Ctrl+wheel up', () => {
       render(<Harness onItemClick={() => {}} />)
 
-      window.dispatchEvent(new WheelEvent('wheel', { deltaY: -200, clientX: 300, clientY: 200, cancelable: true }))
+      window.dispatchEvent(
+        new WheelEvent('wheel', { deltaY: -200, ctrlKey: true, clientX: 300, clientY: 200, cancelable: true })
+      )
       expect(latest.scale).toBeGreaterThan(1)
     })
 
-    it('zooms out on wheel down', () => {
+    it('zooms out on Ctrl+wheel down', () => {
       render(<Harness onItemClick={() => {}} />)
 
-      window.dispatchEvent(new WheelEvent('wheel', { deltaY: 200, clientX: 300, clientY: 200, cancelable: true }))
+      window.dispatchEvent(
+        new WheelEvent('wheel', { deltaY: 200, ctrlKey: true, clientX: 300, clientY: 200, cancelable: true })
+      )
       expect(latest.scale).toBeLessThan(1)
+    })
+
+    it('zooms with Cmd as well, for the macOS convention', () => {
+      render(<Harness onItemClick={() => {}} />)
+
+      window.dispatchEvent(
+        new WheelEvent('wheel', { deltaY: -200, metaKey: true, clientX: 300, clientY: 200, cancelable: true })
+      )
+      expect(latest.scale).toBeGreaterThan(1)
     })
 
     it('prevents the default action so the page cannot scroll', () => {
@@ -248,7 +261,9 @@ describe('usePanZoom', () => {
       const cursor = { x: 400, y: 300 }
       const worldBefore = { x: (cursor.x - latest.x) / latest.scale, y: (cursor.y - latest.y) / latest.scale }
 
-      window.dispatchEvent(new WheelEvent('wheel', { deltaY: -300, clientX: cursor.x, clientY: cursor.y, cancelable: true }))
+      window.dispatchEvent(
+        new WheelEvent('wheel', { deltaY: -300, ctrlKey: true, clientX: cursor.x, clientY: cursor.y, cancelable: true })
+      )
 
       const worldAfter = { x: (cursor.x - latest.x) / latest.scale, y: (cursor.y - latest.y) / latest.scale }
       expect(worldAfter.x).toBeCloseTo(worldBefore.x, 6)
@@ -261,6 +276,44 @@ describe('usePanZoom', () => {
 
       window.dispatchEvent(new WheelEvent('wheel', { deltaY: -200, clientX: 0, clientY: 0, cancelable: true }))
       expect(latest).toEqual({ scale: 1, x: 0, y: 0 })
+    })
+  })
+
+  describe('wheel pan (no modifier)', () => {
+    it('pans vertically instead of zooming', () => {
+      // The first gesture most people try. Zooming here changed the
+      // magnification when the user meant to move through the library.
+      latest = { scale: 1, x: 0, y: 0 }
+      render(<Harness onItemClick={() => {}} />)
+
+      window.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, clientX: 300, clientY: 200, cancelable: true }))
+
+      expect(latest.scale).toBe(1)
+      expect(latest.y).toBe(-120)
+    })
+
+    it('pans horizontally from a sideways delta', () => {
+      latest = { scale: 1, x: 0, y: 0 }
+      render(<Harness onItemClick={() => {}} />)
+
+      window.dispatchEvent(new WheelEvent('wheel', { deltaX: 90, clientX: 300, clientY: 200, cancelable: true }))
+
+      expect(latest.x).toBe(-90)
+      expect(latest.scale).toBe(1)
+    })
+
+    it('ignores the cursor position while panning', () => {
+      // A scroll moves everything by the same amount; anchoring it to the
+      // pointer would make the wall drift.
+      latest = { scale: 1, x: 0, y: 0 }
+      render(<Harness onItemClick={() => {}} />)
+
+      window.dispatchEvent(new WheelEvent('wheel', { deltaY: 100, clientX: 10, clientY: 10, cancelable: true }))
+      const fromTopLeft = { ...latest }
+
+      latest = { scale: 1, x: 0, y: 0 }
+      window.dispatchEvent(new WheelEvent('wheel', { deltaY: 100, clientX: 900, clientY: 700, cancelable: true }))
+      expect(latest).toEqual(fromTopLeft)
     })
   })
 })
