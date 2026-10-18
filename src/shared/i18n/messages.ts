@@ -36,7 +36,6 @@ export const en = {
   'filters.fileName': 'File name',
   'filters.fileNamePlaceholder': 'e.g. Kyoto',
   'filters.reset': 'Reset',
-  'filters.summary': '{visible} of {total} photos',
   'filters.range': '{min} → {max}',
   'filters.active': 'filtered',
 

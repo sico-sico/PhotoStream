@@ -27,7 +27,6 @@ export const fr: Catalog = {
   'filters.fileName': 'Nom du fichier',
   'filters.fileNamePlaceholder': 'ex. Kyoto',
   'filters.reset': 'Réinitialiser',
-  'filters.summary': '{visible} sur {total} photos',
   'filters.range': '{min} → {max}',
   'filters.active': 'filtre actif',
 

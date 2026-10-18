@@ -113,7 +113,6 @@ function AppView({
         <FilterPanel
           filters={wall.state.filters}
           photos={wall.state.photos}
-          visibleCount={wall.visiblePhotos.length}
           onChange={wall.setFilters}
           onReset={wall.resetFilters}
         />

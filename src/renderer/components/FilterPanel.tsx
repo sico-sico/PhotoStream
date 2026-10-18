@@ -7,7 +7,6 @@ import { useI18n } from '../i18n/context'
 export interface FilterPanelProps {
   filters: Filters
   photos: readonly Photo[]
-  visibleCount: number
   onChange: (filters: Filters) => void
   onReset: () => void
 }
@@ -17,8 +16,12 @@ export interface FilterPanelProps {
  *
  * Dates come from EXIF, so the picker hints show the range actually present in
  * the folder rather than an arbitrary calendar.
+ *
+ * The photo count is deliberately *not* repeated here: the toolbar already
+ * shows `visible/total` permanently, and rendering it twice put two identical
+ * numbers on top of each other whenever this panel was open.
  */
-export function FilterPanel({ filters, photos, visibleCount, onChange, onReset }: FilterPanelProps): React.JSX.Element {
+export function FilterPanel({ filters, photos, onChange, onReset }: FilterPanelProps): React.JSX.Element {
   const { t } = useI18n()
   const range = useMemo(() => dateRange(photos), [photos])
   const active = Boolean(filters.from || filters.to || filters.text)
@@ -60,11 +63,14 @@ export function FilterPanel({ filters, photos, visibleCount, onChange, onReset }
         </button>
       </div>
 
-      <p className="filter-summary">
-        {t('filters.summary', { visible: visibleCount, total: photos.length })}
-        {range.min && range.max ? ` · ${t('filters.range', { min: range.min, max: range.max })}` : ''}
-        {active ? ` · ${t('filters.active')}` : ''}
-      </p>
+      {range.min && range.max ? (
+        <p className="filter-summary">
+          {t('filters.range', { min: range.min, max: range.max })}
+          {active ? ` · ${t('filters.active')}` : ''}
+        </p>
+      ) : active ? (
+        <p className="filter-summary">{t('filters.active')}</p>
+      ) : null}
     </section>
   )
 }

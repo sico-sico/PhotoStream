@@ -25,7 +25,7 @@ function Probe(): React.JSX.Element {
     <div>
       <span data-testid="locale">{locale}</span>
       <span data-testid="filters">{t('toolbar.filters')}</span>
-      <span data-testid="summary">{t('filters.summary', { visible: 2, total: 5 })}</span>
+      <span data-testid="summary">{t('viewer.size', { width: 2, height: 5 })}</span>
     </div>
   )
 }
@@ -73,7 +73,7 @@ describe('I18nProvider', () => {
 
   it('substitutes parameters in the active language', () => {
     render(<Harness preference="fr" />)
-    expect(screen.getByTestId('summary')).toHaveTextContent('2 sur 5 photos')
+    expect(screen.getByTestId('summary')).toHaveTextContent('2×5')
   })
 
   it('sets the document language for spell-check and font fallback', () => {

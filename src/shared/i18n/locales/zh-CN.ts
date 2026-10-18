@@ -27,7 +27,6 @@ export const zhCN: Catalog = {
   'filters.fileName': '文件名',
   'filters.fileNamePlaceholder': '例如：京都',
   'filters.reset': '重置',
-  'filters.summary': '{visible} / {total} 张照片',
   'filters.range': '{min} → {max}',
   'filters.active': '已筛选',
 

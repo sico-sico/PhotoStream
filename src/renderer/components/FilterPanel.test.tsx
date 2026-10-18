@@ -19,7 +19,6 @@ function renderPanel(props: Partial<React.ComponentProps<typeof FilterPanel>> = 
       <FilterPanel
         filters={EMPTY}
         photos={photos}
-        visibleCount={2}
         onChange={() => {}}
         onReset={() => {}}
         {...props}
@@ -29,9 +28,11 @@ function renderPanel(props: Partial<React.ComponentProps<typeof FilterPanel>> = 
 }
 
 describe('FilterPanel', () => {
-  it('shows the visible and total counts', () => {
-    renderPanel({ visibleCount: 1 })
-    expect(screen.getByText(/1 of 2 photos/)).toBeInTheDocument()
+  it('does not repeat the photo count shown in the toolbar', () => {
+    // Both elements sit next to each other when the panel is open, so showing
+    // the count twice reads as a rendering bug.
+    renderPanel()
+    expect(screen.queryByText(/photos/)).toBeNull()
   })
 
   it('hints the date range present in the folder', () => {
@@ -106,7 +107,6 @@ describe('FilterPanel', () => {
     expect(screen.getByLabelText('开始日期')).toBeInTheDocument()
     expect(screen.getByLabelText('文件名')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '重置' })).toBeInTheDocument()
-    expect(screen.getByText(/\/ 2 张照片/)).toBeInTheDocument()
     expect(screen.getByText(/已筛选/)).toBeInTheDocument()
   })
 

@@ -110,7 +110,8 @@ describe('LocaleRegistry', () => {
 
   it('substitutes parameters through the translator', () => {
     const registry = new LocaleRegistry()
-    expect(registry.translator('en').t('filters.summary', { visible: 3, total: 9 })).toBe('3 of 9 photos')
+    // `viewer.size` is a real message with two placeholders.
+    expect(registry.translator('en').t('viewer.size', { width: 6000, height: 4000 })).toBe('6000×4000')
   })
 
   describe('extension point', () => {
