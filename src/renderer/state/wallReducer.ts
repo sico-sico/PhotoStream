@@ -17,6 +17,14 @@ export interface WallState {
   sort: SortMode
   /** Id of the photo shown in the viewer, or null. */
   selectedId: string | null
+  /**
+   * Whether the full-size viewer is showing.
+   *
+   * Kept separate from `selectedId` so that closing the viewer can leave the
+   * photo focused: the arrow keys walk photos only when one is focused, and
+   * tying the two together made that impossible after Escape closed the viewer.
+   */
+  viewerOpen: boolean
   status: 'idle' | 'scanning' | 'ready' | 'error'
   /** Photos scanned so far, for the progress indicator. */
   scanDone: number
@@ -32,6 +40,7 @@ export const INITIAL_STATE: WallState = {
   layout: 'grid',
   sort: DEFAULT_SORT,
   selectedId: null,
+  viewerOpen: false,
   status: 'idle',
   scanDone: 0,
   errorMessage: '',
@@ -49,7 +58,10 @@ export type WallAction =
   | { type: 'sort/set'; sort: SortMode }
   | { type: 'locale/set'; locale: string }
   | { type: 'selection/set'; id: string | null }
+  | { type: 'selection/focus'; id: string | null }
   | { type: 'selection/step'; delta: number; order: readonly string[] }
+  | { type: 'viewer/open' }
+  | { type: 'viewer/close' }
 
 export function reducer(state: WallState, action: WallAction): WallState {
   switch (action.type) {
@@ -102,6 +114,18 @@ export function reducer(state: WallState, action: WallAction): WallState {
       return { ...state, locale: action.locale }
 
     case 'selection/set':
+      // Focusing a photo also opens it: that is what clicking a tile means.
+      return { ...state, selectedId: action.id, viewerOpen: action.id !== null }
+
+    case 'viewer/open':
+      return state.selectedId ? { ...state, viewerOpen: true } : state
+
+    case 'viewer/close':
+      // The photo stays focused so the arrow keys keep working on the wall.
+      return { ...state, viewerOpen: false }
+
+    case 'selection/focus':
+      // Move the highlight without opening the viewer.
       return { ...state, selectedId: action.id }
 
     case 'selection/step': {
@@ -111,7 +135,7 @@ export function reducer(state: WallState, action: WallAction): WallState {
       // With nothing selected, the first step opens the first photo.
       const next = current === -1 ? (delta > 0 ? 0 : order.length - 1) : current + delta
       const clamped = Math.min(Math.max(next, 0), order.length - 1)
-      return { ...state, selectedId: order[clamped] }
+      return { ...state, selectedId: order[clamped], viewerOpen: true }
     }
 
     default:

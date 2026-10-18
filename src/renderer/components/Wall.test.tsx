@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, cleanup } from '@testing-library/react'
 import type { Photo } from '@shared/types'
 import { I18nProvider } from '../i18n/I18nProvider'
 import { Wall } from './Wall'
@@ -35,6 +35,7 @@ function renderWall(props: Partial<React.ComponentProps<typeof Wall>> = {}): Ret
         photos={photos}
         thumbUrls={{ a: 'pic://thumb/a-wall.webp' }}
         transform={{ scale: 2, x: 10, y: 20 }}
+        viewport={{ width: 1200, height: 800 }}
         square={false}
         selectedId={null}
         handlers={handlers}
@@ -45,6 +46,97 @@ function renderWall(props: Partial<React.ComponentProps<typeof Wall>> = {}): Ret
 }
 
 describe('Wall', () => {
+  it('only mounts the tiles near the viewport', () => {
+    // Measured on a 3226-photo library: mounting everything cost 27 ms per
+    // frame during a drag, against 17 ms for the visible set alone.
+    const many = Array.from({ length: 400 }, (_, index) => ({
+      id: `p${index}`,
+      path: `/p${index}.jpg`,
+      name: `p${index}.jpg`,
+      width: 1,
+      height: 1,
+      takenAt: '',
+      dateSource: 'none' as const,
+      mtimeMs: 0,
+      sizeBytes: 0
+    }))
+    const items = many.map((photo, index) => ({
+      id: photo.id,
+      x: (index % 20) * 100,
+      y: Math.floor(index / 20) * 100,
+      w: 100,
+      h: 100
+    }))
+
+    render(
+      <I18nProvider preference="en" systemLocales={[]} onLocaleChange={() => {}}>
+        <Wall
+          layout={{ items, width: 2000, height: 2000 }}
+          photos={many}
+          thumbUrls={{}}
+          transform={{ scale: 1, x: 0, y: 0 }}
+          viewport={{ width: 400, height: 400 }}
+          square={false}
+          selectedId={null}
+          handlers={handlers}
+        />
+      </I18nProvider>
+    )
+
+    const mounted = document.querySelectorAll('[data-photo-id]').length
+    expect(mounted).toBeGreaterThan(0)
+    expect(mounted).toBeLessThan(many.length)
+  })
+
+  it('mounts more tiles as the wall is panned', () => {
+    // The culled set has to follow the viewport, or panning would show blanks.
+    const many = Array.from({ length: 200 }, (_, index) => ({
+      id: `p${index}`,
+      path: `/p${index}.jpg`,
+      name: `p${index}.jpg`,
+      width: 1,
+      height: 1,
+      takenAt: '',
+      dateSource: 'none' as const,
+      mtimeMs: 0,
+      sizeBytes: 0
+    }))
+    const items = many.map((photo, index) => ({
+      id: photo.id,
+      x: (index % 10) * 100,
+      y: Math.floor(index / 10) * 100,
+      w: 100,
+      h: 100
+    }))
+
+    const renderAt = (y: number): void => {
+      render(
+        <I18nProvider preference="en" systemLocales={[]} onLocaleChange={() => {}}>
+          <Wall
+            layout={{ items, width: 1000, height: 2000 }}
+            photos={many}
+            thumbUrls={{}}
+            transform={{ scale: 1, x: 0, y }}
+            viewport={{ width: 300, height: 300 }}
+            square={false}
+            selectedId={null}
+            handlers={handlers}
+          />
+        </I18nProvider>
+      )
+    }
+
+    renderAt(0)
+    const top = [...document.querySelectorAll('[data-photo-id]')].map((el) => el.getAttribute('data-photo-id'))
+    cleanup()
+
+    renderAt(-1200)
+    const bottom = [...document.querySelectorAll('[data-photo-id]')].map((el) => el.getAttribute('data-photo-id'))
+
+    expect(top).not.toEqual(bottom)
+    expect(bottom?.some((id) => !top?.includes(id))).toBe(true)
+  })
+
   it('renders one tile per positioned item', () => {
     renderWall()
     expect(document.querySelectorAll('[data-photo-id]')).toHaveLength(2)
@@ -102,6 +194,7 @@ describe('Wall', () => {
           photos={photos}
           thumbUrls={{ a: 'pic://thumb/a-wall.webp' }}
           transform={{ scale: 2, x: 10, y: 20 }}
+          viewport={{ width: 1200, height: 800 }}
           square
           selectedId={null}
           handlers={handlers}
@@ -124,6 +217,7 @@ describe('Wall', () => {
           photos={photos}
           thumbUrls={{}}
           transform={{ scale: 1, x: 0, y: 0 }}
+          viewport={{ width: 1200, height: 800 }}
           square={false}
           selectedId={null}
           handlers={handlers}

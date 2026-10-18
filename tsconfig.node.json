@@ -13,9 +13,9 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "types": ["node", "electron-vite/node", "@testing-library/jest-dom/vitest"],
-    "baseUrl": ".",
+    // TypeScript 7 removed `baseUrl`; path mappings must now be relative.
     "paths": {
-      "@shared/*": ["src/shared/*"]
+      "@shared/*": ["./src/shared/*"]
     }
   },
   "include": [

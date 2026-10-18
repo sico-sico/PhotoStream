@@ -34,6 +34,10 @@ export interface UseWall {
   setSort: (sort: SortMode) => void
   setLocale: (locale: string) => void
   select: (id: string | null) => void
+  /** Focus a photo without opening the viewer (arrow-key navigation). */
+  focus: (id: string | null) => void
+  /** Close the viewer but keep the focused photo. */
+  closeViewer: () => void
   step: (delta: number) => void
   openPhoto: Photo | null
   fitToView: (viewport: { width: number; height: number }) => void
@@ -104,8 +108,8 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
   }, [layout.items, transform.x, transform.y, transform.scale, viewport.width, viewport.height])
 
   const openPhoto = useMemo(
-    () => state.photos.find((photo) => photo.id === state.selectedId) ?? null,
-    [state.photos, state.selectedId]
+    () => (state.viewerOpen ? state.photos.find((photo) => photo.id === state.selectedId) ?? null : null),
+    [state.photos, state.selectedId, state.viewerOpen]
   )
 
   // Restore the previous session once, before the user does anything.
@@ -251,6 +255,8 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
     setSort: (sort) => dispatch({ type: 'sort/set', sort }),
     setLocale: (locale) => dispatch({ type: 'locale/set', locale }),
     select: (id) => dispatch({ type: 'selection/set', id }),
+    focus: (id) => dispatch({ type: 'selection/focus', id }),
+    closeViewer: () => dispatch({ type: 'viewer/close' }),
     step: (delta) => dispatch({ type: 'selection/step', delta, order: visiblePhotos.map((photo) => photo.id) }),
     openPhoto,
     fitToView

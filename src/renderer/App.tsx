@@ -3,11 +3,13 @@ import { FilterPanel } from './components/FilterPanel'
 import { Toolbar } from './components/Toolbar'
 import { Viewer } from './components/Viewer'
 import { Wall } from './components/Wall'
+import type { WallHandle } from './components/Wall'
 import { usePanZoom } from './hooks/usePanZoom'
 import { useWall } from './hooks/useWall'
 import { I18nProvider } from './i18n/I18nProvider'
 import { useI18n } from './i18n/context'
 import { fitWallTransform } from '@shared/transform'
+import { centerOn, isComfortablyVisible, isPanKey, neighbourInDirection, panByKey } from '@shared/keyboard'
 import type { AppInfo } from '@shared/types'
 
 /** Measure an element's box, re-measuring on resize. */
@@ -72,10 +74,17 @@ function AppView({
 }): React.JSX.Element {
   const { t } = useI18n()
   const fittedFor = useRef('')
+  const wallRef = useRef<WallHandle | null>(null)
+  // Read inside the pan callback, which must not be re-created per transform.
+  const transformRef = useRef(wall.transform)
+  transformRef.current = wall.transform
 
   const handlers = usePanZoom(wall.setTransform, {
     onItemClick: (id) => wall.select(id),
-    onBackgroundClick: () => setFiltersOpen(false)
+    onBackgroundClick: () => setFiltersOpen(false),
+    // Per-frame pan goes straight to the DOM; state is committed on release.
+    onLiveTransform: (next) => wallRef.current?.applyTransform(next),
+    getTransform: () => transformRef.current
   })
   // Frame the wall the first time it has content, and again when the folder
   // or layout changes, so the user never starts staring at empty space.
@@ -94,6 +103,57 @@ function AppView({
     () => (wall.openPhoto ? wall.thumbUrls[wall.openPhoto.id] : undefined),
     [wall.openPhoto, wall.thumbUrls]
   )
+
+  /**
+   * Arrow keys pan the wall, or move the focus between photos.
+   *
+   * Three things must not be hijacked:
+   * - the viewer, which already uses the arrows to step through photos;
+   * - a text field, where the arrows move the caret;
+   * - a menu, which uses them for its own navigation.
+   */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.defaultPrevented) return
+      if (wall.openPhoto) return
+      if (event.altKey || event.ctrlKey || event.metaKey) return
+      if (!isPanKey(event.key)) return
+
+      const target = event.target as HTMLElement | null
+      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return
+      if (target?.closest('.menu-panel')) return
+
+      const layoutByItem = new Map(wall.layout.items.map((item) => [item.id, item]))
+
+      if (wall.state.selectedId) {
+        // A photo is focused: move the focus, not the canvas. The wall then
+        // scrolls only if the new photo would be off screen.
+        const current = layoutByItem.get(wall.state.selectedId)
+        if (current) {
+          const nextId = neighbourInDirection(wall.layout.items, current, event.key)
+          if (nextId) {
+            event.preventDefault()
+            // `focus`, not `select`: the viewer is closed here, so the arrows
+            // walk the wall rather than reopening photo after photo.
+            wall.focus(nextId)
+            const next = layoutByItem.get(nextId)
+            const centre = next ? { x: next.x + next.w / 2, y: next.y + next.h / 2 } : null
+            if (centre && !isComfortablyVisible(wall.transform, centre, viewport)) {
+              wall.setTransform(centerOn(wall.transform, centre, viewport))
+            }
+            return
+          }
+        }
+      }
+
+      // Nothing selected, or no neighbour in that direction: pan the canvas.
+      event.preventDefault()
+      wall.setTransform(panByKey(wall.transform, event.key, viewport, event.shiftKey))
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [viewport, wall])
 
   return (
     <div className="app" ref={viewport.ref}>
@@ -139,10 +199,12 @@ function AppView({
         </div>
       ) : (
         <Wall
+          ref={wallRef}
           layout={wall.layout}
           photos={wall.visiblePhotos}
           thumbUrls={wall.thumbUrls}
           transform={wall.transform}
+          viewport={{ width: viewport.width, height: viewport.height }}
           square={wall.state.layout === 'square'}
           selectedId={wall.state.selectedId}
           handlers={handlers}
@@ -153,7 +215,7 @@ function AppView({
         <Viewer
           photo={wall.openPhoto}
           previewUrl={visibleUrl}
-          onClose={() => wall.select(null)}
+          onClose={wall.closeViewer}
           onPrev={() => wall.step(-1)}
           onNext={() => wall.step(1)}
           onReveal={() => void window.photoStream.revealInFolder(wall.openPhoto!.path)}

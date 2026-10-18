@@ -2,27 +2,32 @@
 
 桌面照片墙：自由拖动、滚轮缩放、可折叠筛选、单张查看。便携版，无需安装。
 
-![Electron](https://img.shields.io/badge/Electron-44-blue) ![React](https://img.shields.io/badge/React-19-61dafb) ![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178c6)
+![Electron](https://img.shields.io/badge/Electron-44-blue) ![React](https://img.shields.io/badge/React-19-61dafb) ![TypeScript](https://img.shields.io/badge/TypeScript-7-3178c6)
 
 ## 功能
 
-- **照片墙**：读取一个文件夹的 JPEG，按 EXIF 拍摄时间排序，任意方向拖动，滚轮以光标为锚点缩放。
+- **照片墙**：读取一个文件夹的 JPEG，按 EXIF 拍摄时间排序（默认最新在前），任意方向拖动，滚轮以光标为锚点缩放。
+- **键盘导航**：方向键平移画布；有照片被选中时，方向键改为在照片之间移动焦点，`Shift` 加速。
 - **三种布局**：等高行（保留比例）、瀑布流（保留比例）、正方形网格。
+- **排序**：最新优先 / 最早优先 / 名称 A→Z / 名称 Z→A，选择会被记住。
 - **筛选**：日期范围（来自 EXIF）+ 文件名关键字，默认显示全部。
-- **单张查看**：先显示缓存缩略图，原图解码完成后无感替换；`←/→` 翻页，`Esc` 关闭。
+- **单张查看**：先显示缓存缩略图，原图解码完成后无感替换；滚轮/双指缩放、拖拽平移、旋转、`←/→` 翻页、`Esc` 关闭。
 - **文件监听**：新增、覆盖、删除照片都会实时反映到墙上，无需重新打开文件夹。
 - **多语言**：中文（简体）、English、Français，默认跟随系统语言，可运行时切换。
+- **无边框窗口**：自绘标题栏与窗口按钮，工具栏空白处拖动窗口。
 - **便携**：所有数据写在 exe 同级的 `PhotoStreamData/`，整个目录可随意移动。
 
 ## 快速开始
 
 ```bash
-npm install          # 需要 Node >= 22.12
+npm install          # 需要 Node >= 22.12（开发机使用 Node 24 LTS）
 npm run dev          # 开发模式
 npm run dist         # 打包绿色版到 release/
 ```
 
 `npm run dist` 产出 `release/PhotoStream-portable-win-x64/`，运行其中的 `PhotoStream.exe` 即可。
+
+修改应用图标：编辑 `build/icon.svg`，然后 `npm run icon` 重新生成 `icon.ico`（16/24/32/48/64/128/256）与 `icon.png`。
 
 ## 技术选型
 
@@ -31,15 +36,35 @@ npm run dist         # 打包绿色版到 release/
 | 运行时 | Electron 44（Chromium 152 / Node 24） | 图像处理生态成熟，前端开发效率高 |
 | 缩略图 | `sharp`（libvips） | 实测 512px WebP 约 1.2 ms/张，比 `nativeImage.createThumbnailFromPath` 快 5.5 倍、体积小 10 倍 |
 | EXIF | `sharp.metadata()` + `exif-reader` | `exif-reader` 零依赖且仍在维护；`exifr` 已 4.5 年未更新 |
-| 画布 | 单容器 CSS `transform` | 3226 个瓦片实测稳定 16.7 ms/帧（60 fps），无需 Canvas 库 |
+| 画布 | 单容器 CSS `transform` + 视口裁剪 | 见下方「拖动性能」 |
 | 文件监听 | Node 内置 `fs.watch` | 少一个依赖，避开 ESM/CJS 问题；本应用只面向 Windows |
 | 打包 | `@electron/packager` | `electron-builder` 会引入 8 个已知漏洞和 4 个弃用包 |
+| 类型系统 | TypeScript 7 | 原生 Go 实现，类型检查快一个数量级；迁移只需去掉 `baseUrl` 并显式声明 CSS 导入 |
 
 详细的实测数据见 [`research.md`](./research.md)。
 
 ## 关键实现细节
 
 这些是踩过的坑，改动相关代码前值得先读。
+
+### 拖动性能
+
+3226 张照片时拖动卡顿，逐项测量排除了几个想当然的病因：
+
+| 假设 | 实测 |
+|------|------|
+| transform 写入太慢 | 0.51 ms/次，不是原因 |
+| box-shadow 太多 | 去掉全部阴影后仍 28 ms/帧 |
+| 字幕文本重绘 | 隐藏后反而更慢 |
+| 视差/布局刷新 | 强制 style+layout 仅 3.6 ms |
+| **同时挂载的 DOM 节点数** | **3026 个 → 27 ms/帧；只留 200 个 → 17 ms/帧** |
+
+即使完全不经过 React、直接写 `style.transform` 也只有 26 ms/帧，所以瓶颈是节点数量本身。两个修复：
+
+1. **视口裁剪**（`shared/cull.ts`）：只挂载可见区域加一屏边距的瓦片，上限 600 个。
+2. **拖动期间直写 DOM**（`usePanZoom` + `Wall` 的 `applyTransform`）：每帧只改 `style.transform`，松手时提交一次 React 状态。
+
+结果：DOM 瓦片 3226 → 64，帧时间中位数 **17 ms（60 fps）**，p95 17 ms，超时帧 0。
 
 ### EXIF 时区
 
@@ -61,13 +86,13 @@ Windows 编辑器（记事本、PowerShell）会在 UTF-8 文件前加 BOM，`JS
 
 ```bash
 npm run typecheck        # 同时检查 main/preload 与 renderer
-npm run test             # 405 个单元/集成测试
+npm run test             # 588 个单元/集成测试
 npm run test:coverage    # 覆盖率门槛：70%
-npm run test:e2e         # 12 个 Playwright 端到端测试
+npm run test:e2e         # 20 个 Playwright 端到端测试
 npm run verify           # 以上全部
 ```
 
-覆盖率（当前）：语句 93.5%、分支 89.6%、函数 90.6%、行 95.6%。
+覆盖率（当前）：语句 92.4%、分支 88.1%、函数 89.4%、行 94.5%。
 
 测试分层：
 - **纯逻辑**（`src/shared`）：布局、变换、筛选、手势、i18n — 无 IO，可直接断言。
@@ -99,17 +124,32 @@ src/
 │  └─ paths.ts        便携数据目录
 ├─ preload/           contextBridge 白名单 API
 ├─ renderer/          React 界面
-│  ├─ components/     Toolbar / Wall / Tile / Viewer / FilterPanel
+│  ├─ components/     Toolbar / Wall / Tile / Viewer / FilterPanel / SortPicker / Menu
 │  ├─ hooks/          useWall（状态编排）、usePanZoom（手势）
 │  ├─ state/          wallReducer（纯 reducer）
 │  └─ i18n/           语言上下文
 └─ shared/            主进程与渲染层共用
    ├─ layout.ts       三种布局算法
    ├─ transform.ts    平移缩放数学
+   ├─ cull.ts         视口裁剪（拖动性能）
+   ├─ keyboard.ts     键盘平移与方向键选择
    ├─ filters.ts      筛选逻辑
    ├─ gesture.ts      点击与拖拽判定
    └─ i18n/           消息目录与语言注册表
 ```
+
+## 快捷键
+
+| 场景 | 按键 | 作用 |
+|------|------|------|
+| 照片墙 | `←/→/↑/↓` | 平移画布 |
+| 照片墙 | `Shift` + 方向键 | 大幅平移 |
+| 照片墙（已选中照片） | 方向键 | 在照片之间移动焦点，必要时自动滚动 |
+| 查看页 | `←/→` | 上一张 / 下一张 |
+| 查看页 | `+` / `-` | 缩放 |
+| 查看页 | `R`、`]`、`[` | 旋转 |
+| 查看页 | `0` | 复位（关掉缩放与旋转） |
+| 查看页 | `Esc` | 关闭（保留选中态） |
 
 ## 添加语言
 
@@ -144,7 +184,7 @@ locales.register({ id: 'de', label: 'Deutsch', catalog: de })
 
 | 文件 | 内容 |
 |------|------|
-| `settings.json` | 布局、筛选、上次文件夹、语言 |
+| `settings.json` | 布局、排序、筛选、上次文件夹、语言 |
 | `thumbs/` | 缩略图缓存（可安全删除，会重新生成） |
 
 删除整个 `PhotoStreamData/` 即可恢复初始状态。

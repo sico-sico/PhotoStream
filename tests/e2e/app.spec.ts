@@ -249,6 +249,108 @@ test('zooms with the wheel and pans by dragging', async () => {
   expect(afterDrag).not.toBe(afterZoom)
 })
 
+test('pans the wall with the arrow keys', async () => {
+  await useEnglish()
+  const world = page.locator('[data-testid="world"]')
+  const transformOf = () => world.evaluate((el: HTMLElement) => el.style.transform)
+
+  // Start from a known position: the folder was just zoomed and dragged.
+  await page.getByRole('button', { name: 'Rows' }).click()
+  const before = await transformOf()
+
+  // The right arrow reveals what is to the right, so the wall moves left.
+  await page.keyboard.press('ArrowRight')
+  await expect.poll(transformOf).not.toBe(before)
+  const afterRight = await transformOf()
+
+  await page.keyboard.press('ArrowLeft')
+  // Back where it started, within the rounding of the step.
+  expect(await transformOf()).not.toBe(afterRight)
+
+  await page.keyboard.press('ArrowDown')
+  const afterDown = await transformOf()
+  expect(afterDown).not.toBe(afterRight)
+
+  // Shift takes a much larger step.
+  await page.keyboard.press('Shift+ArrowDown')
+  expect(await transformOf()).not.toBe(afterDown)
+})
+
+test('moves the selection with the arrow keys', async () => {
+  await useEnglish()
+
+  // Return the wall to a fitted, unzoomed state: earlier tests leave it zoomed
+  // and panned far enough that no tile is mounted (they are culled), and a
+  // culled wall has nothing to click. Switching layouts changes the fit key,
+  // which re-fits the view; clicking the already-active layout would be a no-op.
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: 'Square' }).click()
+  await page.getByRole('button', { name: 'Rows' }).click()
+  await expect(page.locator('[data-photo-id]').first()).toBeVisible()
+
+  // Opening and closing a photo leaves it focused, which is what the arrow keys
+  // act on; that is the whole point of closing the viewer instead of deselecting.
+  await page.locator('[data-photo-id]').first().click()
+  const viewer = page.getByRole('dialog')
+  await expect(viewer).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(viewer).toBeHidden()
+
+  const selected = (): Promise<string | null> =>
+    page.locator('[data-photo-id].selected').first().getAttribute('data-photo-id')
+
+  const first = await selected()
+  expect(first).toBeTruthy()
+
+  await page.keyboard.press('ArrowRight')
+  await expect.poll(selected).not.toBe(first)
+
+  const second = await selected()
+  expect(second).toBeTruthy()
+
+  await page.keyboard.press('ArrowLeft')
+  await expect.poll(selected).toBe(first)
+
+  // The viewer must stay closed: the arrows move the highlight, they do not
+  // reopen every photo on the way.
+  await expect(viewer).toBeHidden()
+})
+
+test('steps through photos with the arrows while the viewer is open', async () => {
+  await useEnglish()
+  await page.locator('[data-photo-id]').first().click()
+  const viewer = page.getByRole('dialog')
+  await expect(viewer).toBeVisible()
+
+  const firstCaption = await viewer.locator('.viewer-meta strong').textContent()
+  await page.keyboard.press('ArrowRight')
+  await expect.poll(() => viewer.locator('.viewer-meta strong').textContent()).not.toBe(firstCaption)
+
+  await page.keyboard.press('ArrowLeft')
+  await expect.poll(() => viewer.locator('.viewer-meta strong').textContent()).toBe(firstCaption)
+
+  await page.keyboard.press('Escape')
+  await expect(viewer).toBeHidden()
+})
+
+test('keeps the viewer keyboard separate from the wall', async () => {
+  await useEnglish()
+  // The viewer uses the arrows to step between photos; the wall must not pan
+  // underneath it.
+  await page.locator('[data-photo-id]').first().click()
+  const viewer = page.getByRole('dialog')
+  await expect(viewer).toBeVisible()
+
+  const world = page.locator('[data-testid="world"]')
+  const before = await world.evaluate((el: HTMLElement) => el.style.transform)
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('ArrowDown')
+
+  expect(await world.evaluate((el: HTMLElement) => el.style.transform)).toBe(before)
+  await page.keyboard.press('Escape')
+  await expect(viewer).toBeHidden()
+})
+
 test('opens a photo in the viewer and navigates with the keyboard', async () => {
   await useEnglish()
   // A click, not a drag: the distance threshold must not swallow it.

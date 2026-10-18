@@ -134,6 +134,33 @@ describe('wallReducer', () => {
       expect(reducer({ ...INITIAL_STATE, selectedId: 'b' }, { type: 'selection/set', id: null }).selectedId).toBeNull()
     })
 
+    it('opens the viewer when a photo is selected', () => {
+      // Clicking a tile both focuses and opens it, so one action covers both.
+      expect(reducer(INITIAL_STATE, { type: 'selection/set', id: 'b' }).viewerOpen).toBe(true)
+      expect(reducer({ ...INITIAL_STATE, selectedId: 'b', viewerOpen: true }, { type: 'selection/set', id: null }).viewerOpen).toBe(
+        false
+      )
+    })
+
+    it('keeps the photo focused when the viewer closes', () => {
+      // Arrow-key navigation depends on this: if closing the viewer also cleared
+      // the selection, the arrows would never have a photo to walk from.
+      const open: WallState = { ...INITIAL_STATE, selectedId: 'b', viewerOpen: true }
+      const closed = reducer(open, { type: 'viewer/close' })
+      expect(closed.viewerOpen).toBe(false)
+      expect(closed.selectedId).toBe('b')
+    })
+
+    it('moves the focus without opening the viewer', () => {
+      const focused = reducer({ ...INITIAL_STATE, selectedId: 'a', viewerOpen: false }, { type: 'selection/focus', id: 'b' })
+      expect(focused.selectedId).toBe('b')
+      expect(focused.viewerOpen).toBe(false)
+    })
+
+    it('does not reopen the viewer when there is no selection', () => {
+      expect(reducer(INITIAL_STATE, { type: 'viewer/open' }).viewerOpen).toBe(false)
+    })
+
     it('steps forward and backward', () => {
       const at = (id: string): WallState => ({ ...INITIAL_STATE, selectedId: id })
       expect(reducer(at('b'), { type: 'selection/step', delta: 1, order }).selectedId).toBe('c')

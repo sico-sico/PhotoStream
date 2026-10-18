@@ -15,6 +15,10 @@ import type { Transform } from '@shared/transform'
  */
 
 let latest: Transform = { scale: 1, x: 0, y: 0 }
+/** Every transform the hook pushed to the DOM during a gesture. */
+let live: Transform[] = []
+/** How many times the hook asked React to re-render. */
+let commits = 0
 
 function Harness({
   onItemClick,
@@ -27,12 +31,15 @@ function Harness({
 }): React.JSX.Element {
   const ref = useRef<HTMLDivElement | null>(null)
   const setTransform = (updater: (previous: Transform) => Transform): void => {
+    commits += 1
     latest = updater(latest)
   }
   const handlers = usePanZoom(setTransform, {
     onItemClick,
     onBackgroundClick,
-    wheelTarget: wheelOn === 'element' ? ref.current : null
+    wheelTarget: wheelOn === 'element' ? ref.current : null,
+    onLiveTransform: (transform) => live.push(transform),
+    getTransform: () => latest
   })
 
   return (
@@ -64,6 +71,8 @@ if (!Element.prototype.setPointerCapture) {
 afterEach(() => {
   cleanup()
   latest = { scale: 1, x: 0, y: 0 }
+  live = []
+  commits = 0
 })
 
 describe('usePanZoom', () => {
@@ -79,7 +88,9 @@ describe('usePanZoom', () => {
       expect(latest).toEqual({ scale: 1, x: 40, y: 30 })
     })
 
-    it('accumulates multiple moves in one gesture', () => {
+    it('accumulates multiple moves into the transform committed on release', () => {
+      // State is only written once, when the gesture ends: routing every frame
+      // through React re-rendered 3226 tiles and cost 27 ms per frame.
       render(<Harness onItemClick={() => {}} />)
       const stage = document.querySelector('[data-testid="stage"]')!
 
@@ -87,8 +98,32 @@ describe('usePanZoom', () => {
       pointer(stage, 'pointermove', { clientX: 10, clientY: 0 })
       pointer(stage, 'pointermove', { clientX: 10, clientY: 25 })
       pointer(stage, 'pointermove', { clientX: 30, clientY: 25 })
+      pointer(stage, 'pointerup', { clientX: 30, clientY: 25 })
 
       expect(latest).toEqual({ scale: 1, x: 30, y: 25 })
+    })
+
+    it('reports every frame to the live callback without touching state', () => {
+      live = []
+      commits = 0
+      render(<Harness onItemClick={() => {}} />)
+      const stage = document.querySelector('[data-testid="stage"]')!
+
+      pointer(stage, 'pointerdown', { clientX: 0, clientY: 0, button: 0 })
+      pointer(stage, 'pointermove', { clientX: 10, clientY: 0 })
+      pointer(stage, 'pointermove', { clientX: 25, clientY: 5 })
+
+      // The DOM has followed the pointer the whole way...
+      expect(live).toEqual([
+        { scale: 1, x: 10, y: 0 },
+        { scale: 1, x: 25, y: 5 }
+      ])
+      // ...while React has not been asked to render even once.
+      expect(commits).toBe(0)
+
+      pointer(stage, 'pointerup', { clientX: 25, clientY: 5 })
+      expect(commits).toBe(1)
+      expect(latest).toEqual({ scale: 1, x: 25, y: 5 })
     })
 
     it('does not pan on a right click', () => {

@@ -15,10 +15,10 @@
     "isolatedModules": true,
     "jsx": "react-jsx",
     "types": ["@testing-library/jest-dom/vitest"],
-    "baseUrl": ".",
+    // TypeScript 7 removed `baseUrl`; path mappings must now be relative.
     "paths": {
-      "@/*": ["src/renderer/*"],
-      "@shared/*": ["src/shared/*"]
+      "@/*": ["./src/renderer/*"],
+      "@shared/*": ["./src/shared/*"]
     }
   },
   "include": ["src/renderer/**/*", "src/shared/**/*", "src/preload/*.d.ts"]
