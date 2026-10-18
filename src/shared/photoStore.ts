@@ -1,4 +1,5 @@
-import type { Photo } from './types'
+import type { Photo, SortMode } from './types'
+import { DEFAULT_SORT } from './types'
 
 /**
  * Photo collection operations.
@@ -8,30 +9,60 @@ import type { Photo } from './types'
  * not "how do I splice an array".
  */
 
-/** Sort by capture date (oldest first), then name; undated photos go last. */
-export function sortPhotos(photos: readonly Photo[]): Photo[] {
-  return photos.slice().sort((a, b) => {
-    if (a.takenAt && b.takenAt) {
-      if (a.takenAt !== b.takenAt) return a.takenAt < b.takenAt ? -1 : 1
-      return a.name.localeCompare(b.name, 'zh-Hans-CN')
+/** Locale-aware name comparison, kept in one place so ties stay consistent. */
+function byName(a: Photo, b: Photo): number {
+  return a.name.localeCompare(b.name, 'zh-Hans-CN')
+}
+
+/**
+ * Order the wall.
+ *
+ * Undated photos always go last, whichever direction is chosen: they have no
+ * position in a timeline, and letting them lead a newest-first wall would put
+ * the least informative photos at the top. Within the undated group the order
+ * is by name, so it stays stable between runs and between disk scans.
+ */
+export function sortPhotos(photos: readonly Photo[], mode: SortMode = DEFAULT_SORT): Photo[] {
+  const dated = photos.filter((photo) => photo.takenAt !== '')
+  const undated = photos.filter((photo) => photo.takenAt === '')
+
+  const byDate = (a: Photo, b: Photo): number => {
+    if (a.takenAt !== b.takenAt) {
+      const older = a.takenAt < b.takenAt ? -1 : 1
+      return mode === 'taken-asc' ? older : -older
     }
-    if (a.takenAt) return -1
-    if (b.takenAt) return 1
-    return a.name.localeCompare(b.name, 'zh-Hans-CN')
-  })
+    const name = byName(a, b)
+    // A reversed date order keeps its direction for same-day photos too, so the
+    // newest day reads newest-first rather than silently flipping mid-list.
+    return mode === 'taken-desc' ? -name : name
+  }
+
+  const byNameOnly = (a: Photo, b: Photo): number => {
+    const name = byName(a, b)
+    return mode === 'name-desc' ? -name : name
+  }
+
+  // `name-*` modes ignore the capture date entirely: the user asked for the
+  // file names, and interleaving by date would look arbitrary.
+  if (mode === 'name-asc' || mode === 'name-desc') {
+    return photos.slice().sort(byNameOnly)
+  }
+
+  return [...dated.sort(byDate), ...undated.sort(byNameOnly)]
 }
 
 /**
  * Insert or replace a photo, returning a new sorted array.
+ *
  * Replacing by path (not by id alone) means a renamed file is treated as a
  * different photo, which is correct for a filesystem-backed wall.
  */
-export function upsertPhoto(photos: readonly Photo[], photo: Photo): Photo[] {
+export function upsertPhoto(photos: readonly Photo[], photo: Photo, mode: SortMode = DEFAULT_SORT): Photo[] {
   const next = photos.slice()
   const index = next.findIndex((item) => item.path === photo.path)
   if (index === -1) next.push(photo)
   else next[index] = photo
-  return sortPhotos(next)
+  return sortPhotos(next, mode)
 }
 
 /** Remove the photo at `path`; returns the original array when nothing matched. */

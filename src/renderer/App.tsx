@@ -100,12 +100,14 @@ function AppView({
       <Toolbar
         dir={wall.state.dir}
         layout={wall.state.layout}
+        sort={wall.state.sort}
         filtersOpen={filtersOpen}
         busy={wall.busy}
         visibleCount={wall.visiblePhotos.length}
         totalCount={wall.state.photos.length}
         onChooseFolder={wall.chooseFolder}
         onLayoutChange={wall.setLayout}
+        onSortChange={wall.setSort}
         onToggleFilters={() => setFiltersOpen((open) => !open)}
       />
 

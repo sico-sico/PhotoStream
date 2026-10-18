@@ -23,12 +23,34 @@ describe('settingsPath', () => {
 
 describe('sanitizeSettings', () => {
   it('keeps a fully valid object', () => {
-    const value = { lastDir: '/photos', layout: 'masonry' as const, filters: { from: '2020-01-01', to: '', text: 'x' }, locale: 'fr' }
+    const value = {
+      lastDir: '/photos',
+      layout: 'masonry' as const,
+      sort: 'name-asc' as const,
+      filters: { from: '2020-01-01', to: '', text: 'x' },
+      locale: 'fr'
+    }
     expect(sanitizeSettings(value)).toEqual(value)
   })
 
   it('falls back for an unknown layout', () => {
     expect(sanitizeSettings({ layout: 'spiral' }).layout).toBe(DEFAULT_SETTINGS.layout)
+  })
+
+  it('defaults a missing sort mode to newest first', () => {
+    // Settings files written before ordering shipped have no `sort` key at all.
+    expect(sanitizeSettings({ lastDir: '/photos' }).sort).toBe('taken-desc')
+  })
+
+  it('accepts every known sort mode', () => {
+    for (const sort of ['taken-desc', 'taken-asc', 'name-asc', 'name-desc'] as const) {
+      expect(sanitizeSettings({ sort }).sort).toBe(sort)
+    }
+  })
+
+  it('falls back for an unknown sort mode', () => {
+    expect(sanitizeSettings({ sort: 'random' }).sort).toBe(DEFAULT_SETTINGS.sort)
+    expect(sanitizeSettings({ sort: 42 }).sort).toBe(DEFAULT_SETTINGS.sort)
   })
 
   it('accepts every known layout', () => {
@@ -125,7 +147,13 @@ describe('loadSettings', () => {
 
 describe('saveSettings', () => {
   it('writes valid JSON that round-trips', async () => {
-    const settings = { lastDir: '/photos', layout: 'masonry' as const, filters: { from: '2020-01-01', to: '2020-12-31', text: 'kyoto' }, locale: 'fr' }
+    const settings = {
+      lastDir: '/photos',
+      layout: 'masonry' as const,
+      sort: 'taken-asc' as const,
+      filters: { from: '2020-01-01', to: '2020-12-31', text: 'kyoto' },
+      locale: 'fr'
+    }
     await saveSettings(dir, settings)
 
     expect(JSON.parse(await readFile(settingsPath(dir), 'utf-8'))).toEqual(settings)

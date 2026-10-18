@@ -22,10 +22,15 @@ export function sanitizeSettings(raw: unknown): Settings {
   const source = (raw ?? {}) as Partial<Settings>
   const filters = (source.filters ?? {}) as Partial<Settings['filters']>
   const layout = source.layout
+  const sort = source.sort
 
   return {
     lastDir: typeof source.lastDir === 'string' ? source.lastDir : DEFAULT_SETTINGS.lastDir,
     layout: layout === 'grid' || layout === 'masonry' || layout === 'square' ? layout : DEFAULT_SETTINGS.layout,
+    sort:
+      sort === 'taken-desc' || sort === 'taken-asc' || sort === 'name-asc' || sort === 'name-desc'
+        ? sort
+        : DEFAULT_SETTINGS.sort,
     filters: {
       from: typeof filters.from === 'string' ? filters.from : '',
       to: typeof filters.to === 'string' ? filters.to : '',

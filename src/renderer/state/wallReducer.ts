@@ -1,5 +1,5 @@
-import type { Filters, LayoutMode, Photo } from '@shared/types'
-import { EMPTY_FILTERS } from '@shared/types'
+import type { Filters, LayoutMode, Photo, SortMode } from '@shared/types'
+import { DEFAULT_SORT, EMPTY_FILTERS } from '@shared/types'
 import { sortPhotos } from '@shared/photoStore'
 
 /**
@@ -13,6 +13,8 @@ export interface WallState {
   photos: Photo[]
   filters: Filters
   layout: LayoutMode
+  /** Wall ordering; defaults to newest first. */
+  sort: SortMode
   /** Id of the photo shown in the viewer, or null. */
   selectedId: string | null
   status: 'idle' | 'scanning' | 'ready' | 'error'
@@ -28,6 +30,7 @@ export const INITIAL_STATE: WallState = {
   photos: [],
   filters: EMPTY_FILTERS,
   layout: 'grid',
+  sort: DEFAULT_SORT,
   selectedId: null,
   status: 'idle',
   scanDone: 0,
@@ -43,6 +46,7 @@ export type WallAction =
   | { type: 'filters/set'; filters: Filters }
   | { type: 'filters/reset' }
   | { type: 'layout/set'; layout: LayoutMode }
+  | { type: 'sort/set'; sort: SortMode }
   | { type: 'locale/set'; locale: string }
   | { type: 'selection/set'; id: string | null }
   | { type: 'selection/step'; delta: number; order: readonly string[] }
@@ -64,7 +68,7 @@ export function reducer(state: WallState, action: WallAction): WallState {
       return {
         ...state,
         dir: action.dir,
-        photos: sortPhotos(action.photos),
+        photos: sortPhotos(action.photos, state.sort),
         status: 'ready',
         scanDone: action.photos.length,
         errorMessage: ''
@@ -74,7 +78,7 @@ export function reducer(state: WallState, action: WallAction): WallState {
       return { ...state, status: 'error', errorMessage: action.message }
 
     case 'photos/delta': {
-      const photos = sortPhotos(action.photos)
+      const photos = sortPhotos(action.photos, state.sort)
       // A watched file may vanish while its viewer is open; never keep a dangling id.
       const stillThere = state.selectedId !== null && photos.some((photo) => photo.id === state.selectedId)
       return { ...state, photos, selectedId: stillThere ? state.selectedId : null }
@@ -88,6 +92,11 @@ export function reducer(state: WallState, action: WallAction): WallState {
 
     case 'layout/set':
       return { ...state, layout: action.layout }
+
+    case 'sort/set':
+      // Re-sort the photos already in state: the scan result is not re-fetched,
+      // and leaving them in the old order would only relabel the list.
+      return { ...state, sort: action.sort, photos: sortPhotos(state.photos, action.sort) }
 
     case 'locale/set':
       return { ...state, locale: action.locale }

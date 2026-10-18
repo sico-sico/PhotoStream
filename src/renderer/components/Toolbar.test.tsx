@@ -36,12 +36,14 @@ function renderToolbar(props: Partial<React.ComponentProps<typeof Toolbar>> = {}
       <Toolbar
         dir="/photos"
         layout="grid"
+        sort="taken-desc"
         filtersOpen={false}
         busy={false}
         visibleCount={10}
         totalCount={20}
         onChooseFolder={() => {}}
         onLayoutChange={() => {}}
+        onSortChange={() => {}}
         onToggleFilters={() => {}}
         {...props}
       />

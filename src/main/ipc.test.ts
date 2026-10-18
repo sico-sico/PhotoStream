@@ -60,12 +60,12 @@ describe('PhotoLibrary', () => {
     expect(library.all).toHaveLength(2)
   })
 
-  it('orders photos by capture date on open', async () => {
+  it('orders photos by capture date on open, newest first', async () => {
     await writeJpeg('later.jpg', '2022:01:01 10:00:00')
     await writeJpeg('earlier.jpg', '2019:01:01 10:00:00')
 
     await library.open(photoDir)
-    expect(library.all.map((photo) => photo.name)).toEqual(['earlier.jpg', 'later.jpg'])
+    expect(library.all.map((photo) => photo.name)).toEqual(['later.jpg', 'earlier.jpg'])
   })
 
   it('reports skip and duration metadata', async () => {
@@ -137,7 +137,7 @@ describe('PhotoLibrary', () => {
       await writeJpeg('second.jpg', '2021:01:01 10:00:00')
       await waitFor(() => library.all.length === 2)
 
-      expect(library.all.map((photo) => photo.name)).toEqual(['first.jpg', 'second.jpg'])
+      expect(library.all.map((photo) => photo.name)).toEqual(['second.jpg', 'first.jpg'])
       expect(deltaCount()).toBeGreaterThan(0)
     })
 

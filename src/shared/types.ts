@@ -26,6 +26,17 @@ export interface ScanResult {
 
 export type LayoutMode = 'grid' | 'masonry' | 'square'
 
+/**
+ * Order of the photo wall.
+ *
+ * `taken-desc` is the default: a photo wall is a stream, and the newest photos
+ * are the ones a user is looking for. `taken-asc` keeps the historical order
+ * available for browsing a trip from its beginning.
+ */
+export type SortMode = 'taken-desc' | 'taken-asc' | 'name-asc' | 'name-desc'
+
+export const DEFAULT_SORT: SortMode = 'taken-desc'
+
 export interface Filters {
   /** Inclusive lower bound, `YYYY-MM-DD`, empty means open. */
   from: string
@@ -40,6 +51,8 @@ export const EMPTY_FILTERS: Filters = { from: '', to: '', text: '' }
 export interface Settings {
   lastDir: string
   layout: LayoutMode
+  /** Wall ordering. Legacy files omit it; `sanitizeSettings` fills the default. */
+  sort: SortMode
   filters: Filters
   /**
    * BCP-47 locale tag chosen by the user, or `''` to follow the system locale.
@@ -52,6 +65,7 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   lastDir: '',
   layout: 'grid',
+  sort: DEFAULT_SORT,
   filters: EMPTY_FILTERS,
   locale: ''
 }

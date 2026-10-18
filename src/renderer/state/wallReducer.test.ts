@@ -34,15 +34,32 @@ describe('wallReducer', () => {
       expect(state.errorMessage).toBe('')
     })
 
-    it('stores sorted photos on success', () => {
+    it('stores sorted photos on success, newest first by default', () => {
       const state = reducer(INITIAL_STATE, {
         type: 'scan/success',
         dir: '/p',
-        photos: [photo('b', '2021-01-01'), photo('a', '2019-01-01')]
+        photos: [photo('a', '2019-01-01'), photo('b', '2021-01-01')]
       })
       expect(state.status).toBe('ready')
-      expect(state.photos.map((p) => p.id)).toEqual(['a', 'b'])
+      expect(state.photos.map((p) => p.id)).toEqual(['b', 'a'])
       expect(state.scanDone).toBe(2)
+    })
+
+    it('re-sorts the photos already loaded when the order changes', () => {
+      // The scan result is not re-fetched, so switching the order has to
+      // rearrange what is already in state.
+      const loaded = reducer(INITIAL_STATE, {
+        type: 'scan/success',
+        dir: '/p',
+        photos: [photo('a', '2019-01-01'), photo('b', '2021-01-01')]
+      })
+
+      const ascending = reducer(loaded, { type: 'sort/set', sort: 'taken-asc' })
+      expect(ascending.sort).toBe('taken-asc')
+      expect(ascending.photos.map((p) => p.id)).toEqual(['a', 'b'])
+
+      const newest = reducer(ascending, { type: 'sort/set', sort: 'taken-desc' })
+      expect(newest.photos.map((p) => p.id)).toEqual(['b', 'a'])
     })
 
     it('records an error without losing the directory', () => {
@@ -57,7 +74,7 @@ describe('wallReducer', () => {
     it('replaces the collection and re-sorts', () => {
       const scanning = reducer(INITIAL_STATE, { type: 'scan/success', dir: '/p', photos: [photo('a')] })
       const state = reducer(scanning, { type: 'photos/delta', photos: [photo('c', '2022-01-01'), photo('a')] })
-      expect(state.photos.map((p) => p.id)).toEqual(['a', 'c'])
+      expect(state.photos.map((p) => p.id)).toEqual(['c', 'a'])
     })
 
     it('drops a selection whose file was deleted', () => {

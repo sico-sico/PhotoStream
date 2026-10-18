@@ -87,12 +87,41 @@ test.afterAll(async () => {
 })
 
 /** Return the UI to English before asserting on English labels. */
+/**
+ * Pick a language through the gear menu.
+ *
+ * The picker is no longer permanently visible: preferences live behind the gear,
+ * so every language switch has to open the menu first. Located by class because
+ * the accessible name is itself translated.
+ */
+async function chooseLanguage(id: string): Promise<void> {
+  await page.locator('.menu-trigger').click()
+  await page.locator('.settings-menu select').selectOption(id)
+  // Selecting closes the menu, which also keeps later clicks unobstructed.
+  await expect(page.locator('.menu-panel')).toHaveCount(0)
+}
+
 async function useEnglish(): Promise<void> {
-  // Located by class because the accessible name is translated with the rest
-  // of the UI, which would make a role-based locator fail after a switch.
-  const picker = page.locator('.language-picker select')
-  if ((await picker.inputValue()) !== 'en') await picker.selectOption('en')
+  await page.locator('.menu-trigger').click()
+  const picker = page.locator('.settings-menu select')
+  const current = await picker.inputValue()
+  // Escape rather than select when nothing needs changing, so the state is left
+  // exactly as it was.
+  if (current !== 'en') await picker.selectOption('en')
+  else await page.keyboard.press('Escape')
   await expect(page.getByRole('button', { name: 'Filters' })).toBeVisible()
+}
+
+/**
+ * Open a specific photo by file-name fragment.
+ *
+ * Viewer tests need a known photo rather than "whatever is first": the wall is
+ * newest-first, and the fixtures differ in size and orientation. The tile's text
+ * is only the capture date, so the file name is matched through the image's
+ * `alt`, case-insensitively (the id itself is a lowercased path).
+ */
+async function openPhoto(nameFragment: string): Promise<void> {
+  await page.locator(`[data-photo-id]:has(img[alt*="${nameFragment}" i])`).first().click()
 }
 
 /** Open the seeded photo folder through the stubbed native dialog. */
@@ -124,11 +153,34 @@ test('boots with the seeded English language', async () => {
 test('opens a folder and builds the wall from EXIF dates', async () => {
   await openLibrary()
 
-  // Order comes from EXIF capture dates, oldest first — not from file names.
+  // Order comes from EXIF capture dates, newest first - not from file names.
   const captions = page.locator('.tile-caption')
-  await expect(captions.nth(0)).toHaveText('2019-07-14')
+  await expect(captions.nth(0)).toHaveText('2024-03-11')
   await expect(captions.nth(1)).toHaveText('2020-01-05')
+  await expect(captions.nth(2)).toHaveText('2019-07-14')
+})
+
+test('reorders the wall when the sort mode changes', async () => {
+  await useEnglish()
+  const captions = page.locator('.tile-caption')
+  const picker = page.getByLabel('Sort order')
+
+  await expect(picker).toHaveValue('taken-desc')
+  await expect(captions.nth(0)).toHaveText('2024-03-11')
+
+  await picker.selectOption('taken-asc')
+  await expect(captions.nth(0)).toHaveText('2019-07-14')
   await expect(captions.nth(2)).toHaveText('2024-03-11')
+
+  // Name order ignores the capture date entirely.
+  await picker.selectOption('name-asc')
+  await expect(captions.nth(0)).toHaveText('2019-07-14')
+  await picker.selectOption('name-desc')
+  await expect(captions.nth(0)).toHaveText('2024-03-11')
+
+  // Back to the default so later tests see the documented order.
+  await picker.selectOption('taken-desc')
+  await expect(captions.nth(0)).toHaveText('2024-03-11')
 })
 
 test('renders generated thumbnails through the pic protocol', async () => {
@@ -208,7 +260,7 @@ test('opens a photo in the viewer and navigates with the keyboard', async () => 
   await expect(viewer).toContainText('2020-01-05')
 
   await page.keyboard.press('ArrowLeft')
-  await expect(viewer).toContainText('2019-07-14')
+  await expect(viewer).toContainText('2024-03-11')
 
   await page.keyboard.press('Escape')
   await expect(viewer).toBeHidden()
@@ -216,7 +268,9 @@ test('opens a photo in the viewer and navigates with the keyboard', async () => 
 
 test('zooms and pans inside the viewer', async () => {
   await useEnglish()
-  await page.locator('[data-photo-id]').first().click()
+  // The large landscape fixture: a 200x300 photo can never overflow the stage,
+  // so there would be nothing to pan.
+  await openPhoto('Kyoto')
   const viewer = page.getByRole('dialog')
   await expect(viewer).toBeVisible()
 
@@ -254,7 +308,8 @@ test('zooms and pans inside the viewer', async () => {
 
 test('rotates the photo a quarter turn at a time', async () => {
   await useEnglish()
-  await page.locator('[data-photo-id]').first().click()
+  // A landscape photo on purpose: turning it upright is what forces a refit.
+  await openPhoto('Kyoto')
   const viewer = page.getByRole('dialog')
   await expect(viewer).toBeVisible()
 
@@ -307,7 +362,7 @@ test('rotates the photo a quarter turn at a time', async () => {
 
 test('pinches to zoom inside the viewer', async () => {
   await useEnglish()
-  await page.locator('[data-photo-id]').first().click()
+  await openPhoto('Kyoto')
   const viewer = page.getByRole('dialog')
   await expect(viewer).toBeVisible()
 
@@ -379,20 +434,16 @@ test('does not open the viewer when the wall was dragged', async () => {
 test('switches language at runtime', async () => {
   await useEnglish()
 
-  // The accessible name is itself translated, so the picker is located by its
-  // stable class rather than by a label that changes with the language.
-  const picker = page.locator('.language-picker select')
-  await picker.selectOption('zh-CN')
-
+  await chooseLanguage('zh-CN')
   await expect(page.getByRole('button', { name: '筛选' })).toBeVisible()
   // `lang` drives hyphenation, CJK font fallback and screen-reader pronunciation.
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN')
 
-  await picker.selectOption('fr')
+  await chooseLanguage('fr')
   await expect(page.getByRole('button', { name: 'Filtres' })).toBeVisible()
   await expect(page.locator('html')).toHaveAttribute('lang', 'fr')
 
-  await picker.selectOption('en')
+  await chooseLanguage('en')
   await expect(page.getByRole('button', { name: 'Filters' })).toBeVisible()
   await expect(page.locator('html')).toHaveAttribute('lang', 'en')
 })
@@ -404,13 +455,15 @@ test('picks up a new photo without reopening the folder', async () => {
 
   await expect(page.locator('[data-photo-id]')).toHaveCount(4)
 
+  // Newest first, so the file that just appeared leads the wall.
   const captions = page.locator('.tile-caption')
-  await expect(captions.nth(3)).toHaveText('2025-04-20')
+  await expect(captions.nth(0)).toHaveText('2025-04-20')
 })
 
 test('persists the chosen layout and language across a restart', async () => {
+  await useEnglish()
   await page.getByRole('button', { name: 'Square' }).click()
-  await page.getByRole('combobox', { name: /language/i }).selectOption('fr')
+  await chooseLanguage('fr')
 
   // Give the debounced save a moment to land before restarting.
   await page.waitForTimeout(500)
@@ -424,5 +477,8 @@ test('persists the chosen layout and language across a restart', async () => {
   await page.waitForLoadState('domcontentloaded')
 
   await expect(page.getByRole('button', { name: 'Carré' })).toHaveAttribute('aria-pressed', 'true')
-  await expect(page.getByRole('combobox', { name: /langue/i })).toHaveValue('fr')
+  // The language now lives behind the gear, so the value is checked after
+  // opening it; the button label is already French, which proves it was restored.
+  await page.locator('.menu-trigger').click()
+  await expect(page.locator('.settings-menu select')).toHaveValue('fr')
 })

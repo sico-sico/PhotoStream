@@ -168,6 +168,27 @@ describe('useWall', () => {
 
       expect(result.current.state.dir).toBe('/photos')
       expect(result.current.state.status).toBe('ready')
+      // Newest first: the wall opens on the most recent photo.
+      expect(result.current.visiblePhotos.map((p) => p.id)).toEqual(['b', 'a'])
+    })
+
+    it('reorders the wall when the sort mode changes', async () => {
+      api.openDirectory.mockResolvedValue({
+        dir: '/photos',
+        photos: [photo('a', '2019-01-01'), photo('b', '2021-01-01')],
+        skipped: 0,
+        durationMs: 5
+      })
+
+      const { result } = renderHook(() => useWall(viewport))
+      await act(async () => {
+        await result.current.chooseFolder()
+      })
+      expect(result.current.visiblePhotos.map((p) => p.id)).toEqual(['b', 'a'])
+
+      act(() => {
+        result.current.setSort('taken-asc')
+      })
       expect(result.current.visiblePhotos.map((p) => p.id)).toEqual(['a', 'b'])
     })
 
@@ -274,8 +295,9 @@ describe('useWall', () => {
     it('steps through the visible order', async () => {
       const hook = await openWith([photo('a', '2019-01-01'), photo('b', '2020-01-01'), photo('c', '2021-01-01')])
 
+      // Newest first, so the visible order is c, b, a.
       act(() => {
-        hook.result.current.select('a')
+        hook.result.current.select('c')
       })
       act(() => {
         hook.result.current.step(1)
@@ -466,7 +488,9 @@ describe('useWall', () => {
         photoListener?.({ kind: 'delta', photos: [photo('a'), photo('b')] })
       })
 
-      expect(result.current.visiblePhotos.map((p) => p.id)).toEqual(['a', 'b'])
+      // Both photos share a date, so the name order decides; the default
+      // direction is newest first, which reverses names within a day.
+      expect(result.current.visiblePhotos.map((p) => p.id)).toEqual(['b', 'a'])
     })
 
     it('surfaces a watcher error', async () => {

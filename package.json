@@ -23,6 +23,7 @@
     "test:e2e": "npm run build && playwright test",
     "verify": "npm run typecheck && npm run test:coverage && npm run test:e2e",
     "dist": "electron-vite build && node scripts/package.mjs",
+    "icon": "node scripts/make-icon.mjs",
     "smoke:portable": "node scripts/smoke-portable.mjs release/PhotoStream-portable-win-x64",
     "verify:library": "node --import tsx scripts/verify-library.ts"
   },

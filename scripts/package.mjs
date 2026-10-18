@@ -31,6 +31,9 @@ async function main() {
     arch: 'x64',
     executableName: appName,
     appVersion: JSON.parse(await readText(join(root, 'package.json'))).version,
+    // An .ico with 16/24/32/48/64/128/256 entries: Windows picks the right one
+    // for the taskbar, explorer and the high-DPI variants from a single file.
+    icon: join(root, 'build', 'icon.ico'),
     // Everything the app needs is already built into `out/`.
     ignore: [
       /^\/src($|\/)/,

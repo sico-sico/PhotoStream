@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
-import type { Filters, LayoutMode, Photo, Settings, ThumbLevel } from '@shared/types'
-import { DEFAULT_SETTINGS } from '@shared/types'
+import type { Filters, LayoutMode, Photo, Settings, SortMode, ThumbLevel } from '@shared/types'
+import { DEFAULT_SETTINGS, DEFAULT_SORT } from '@shared/types'
 import { applyFilters } from '@shared/filters'
 import { computeLayout } from '@shared/layout'
 import { pickThumbLevel, REFERENCE_TILE } from '@shared/thumbs'
@@ -31,6 +31,7 @@ export interface UseWall {
   setFilters: (filters: Filters) => void
   resetFilters: () => void
   setLayout: (layout: LayoutMode) => void
+  setSort: (sort: SortMode) => void
   setLocale: (locale: string) => void
   select: (id: string | null) => void
   step: (delta: number) => void
@@ -120,6 +121,7 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
       }
       localeRef.current = settings.locale ?? DEFAULT_SETTINGS.locale
       dispatch({ type: 'layout/set', layout: settings.layout ?? DEFAULT_SETTINGS.layout })
+      dispatch({ type: 'sort/set', sort: settings.sort ?? DEFAULT_SORT })
       dispatch({ type: 'filters/set', filters: settings.filters ?? DEFAULT_SETTINGS.filters })
       dispatch({ type: 'locale/set', locale: settings.locale ?? DEFAULT_SETTINGS.locale })
       if (settings.lastDir) await openDirectory(settings.lastDir)
@@ -150,11 +152,12 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
     const settings: Settings = {
       lastDir: state.dir,
       layout: state.layout,
+      sort: state.sort,
       filters: state.filters,
       locale: state.locale
     }
     void window.photoStream.saveSettings(settings)
-  }, [restored, state.dir, state.layout, state.filters, state.locale])
+  }, [restored, state.dir, state.layout, state.sort, state.filters, state.locale])
 
   // Subscribe to watcher deltas and thumbnail progress.
   useEffect(() => {
@@ -245,6 +248,7 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
     setFilters: (filters) => dispatch({ type: 'filters/set', filters }),
     resetFilters: () => dispatch({ type: 'filters/reset' }),
     setLayout: (layout) => dispatch({ type: 'layout/set', layout }),
+    setSort: (sort) => dispatch({ type: 'sort/set', sort }),
     setLocale: (locale) => dispatch({ type: 'locale/set', locale }),
     select: (id) => dispatch({ type: 'selection/set', id }),
     step: (delta) => dispatch({ type: 'selection/step', delta, order: visiblePhotos.map((photo) => photo.id) }),

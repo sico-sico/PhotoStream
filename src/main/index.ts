@@ -29,6 +29,14 @@ async function createWindow(dataDir: string, thumbCacheDir: string): Promise<voi
     show: false,
     backgroundColor: '#101014',
     title: 'PhotoStream',
+    /**
+     * A frameless window still shows an icon in the taskbar and Alt-Tab list.
+     *
+     * A packaged build gets it from the `.ico` embedded in the exe, so passing a
+     * path is only meaningful in development — and there the path has to point
+     * outside `out/`, at the repository's `build/` folder.
+     */
+    ...(isDev ? { icon: join(__dirname, '../../build/icon.png') } : {}),
     // The default title bar only repeated the app name and the default menu was
     // a stock Electron template with no commands behind it. Both are removed;
     // the renderer draws its own controls and can drag the window via CSS.

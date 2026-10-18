@@ -169,6 +169,73 @@ body {
   opacity: 0.85;
 }
 
+/* ---------- dropdown menu ---------- */
+
+.menu {
+  position: relative;
+  display: flex;
+}
+
+/* Icon-only trigger: the toolbar is short on horizontal room, and the label is
+   still exposed to screen readers and to a hover tooltip. */
+.menu-trigger {
+  display: grid;
+  place-items: center;
+  padding: 6px 8px;
+}
+
+.menu-icon {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+
+.menu-trigger[aria-expanded='true'] {
+  background: var(--bg-raised);
+  color: var(--text);
+}
+
+.menu-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  min-width: 240px;
+  padding: 10px;
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+  /* The panel is interactive, so it must not drag the window with the bar. */
+  -webkit-app-region: no-drag;
+}
+
+.settings-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.settings-field select {
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg-panel);
+  color: var(--text);
+  font: inherit;
+}
+
 /* ---------- buttons ---------- */
 
 .button {

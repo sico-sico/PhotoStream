@@ -1,18 +1,22 @@
-import type { LayoutMode } from '@shared/types'
+import type { LayoutMode, SortMode } from '@shared/types'
 import type { MessageKey } from '@shared/i18n/messages'
 import { useI18n } from '../i18n/context'
-import { LanguagePicker } from './LanguagePicker'
+import { Menu } from './Menu'
+import { SettingsMenuContent } from './SettingsMenuContent'
+import { SortPicker } from './SortPicker'
 import { WindowControls } from './WindowControls'
 
 export interface ToolbarProps {
   dir: string
   layout: LayoutMode
+  sort: SortMode
   filtersOpen: boolean
   busy: boolean
   visibleCount: number
   totalCount: number
   onChooseFolder: () => void
   onLayoutChange: (layout: LayoutMode) => void
+  onSortChange: (sort: SortMode) => void
   onToggleFilters: () => void
 }
 
@@ -25,12 +29,14 @@ const LAYOUTS: ReadonlyArray<{ value: LayoutMode; label: MessageKey; hint: Messa
 export function Toolbar({
   dir,
   layout,
+  sort,
   filtersOpen,
   busy,
   visibleCount,
   totalCount,
   onChooseFolder,
   onLayoutChange,
+  onSortChange,
   onToggleFilters
 }: ToolbarProps): React.JSX.Element {
   const { t } = useI18n()
@@ -69,6 +75,8 @@ export function Toolbar({
         {t('toolbar.filters')}
       </button>
 
+      <SortPicker sort={sort} onChange={onSortChange} />
+
       {/**
        * The only counter in the UI.
        *
@@ -82,8 +90,28 @@ export function Toolbar({
         </span>
       </div>
 
-      <LanguagePicker />
+      {/**
+       * Preferences live behind the gear.
+       *
+       * They are set once and then left alone, so giving them permanent space
+       * crowded out the controls used while browsing. The trigger is icon-only
+       * for the same reason.
+       */}
+      <Menu label={t('toolbar.settings')} icon={<GearIcon />}>
+        {(close) => <SettingsMenuContent onDone={close} />}
+      </Menu>
+
       <WindowControls />
     </header>
+  )
+}
+
+/** A gear, drawn as a path so it needs no icon font or extra asset. */
+function GearIcon(): React.JSX.Element {
+  return (
+    <svg className="menu-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="8" cy="8" r="2.6" />
+      <path d="M8 1.4v1.7M8 12.9v1.7M1.4 8h1.7M12.9 8h1.7M3.3 3.3l1.2 1.2M11.5 11.5l1.2 1.2M12.7 3.3l-1.2 1.2M4.5 11.5l-1.2 1.2" />
+    </svg>
   )
 }

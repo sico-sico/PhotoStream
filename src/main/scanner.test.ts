@@ -86,12 +86,14 @@ describe('scanDirectory', () => {
   })
 
   it('sorts by capture date, not by file name', async () => {
-    // Names are deliberately in the opposite order to the dates.
+    // Names are deliberately in the same order as the dates here, so the test
+    // fails if the implementation falls back to name order.
     await writeJpeg('a-late.jpg', '2024:03:11 10:00:00')
     await writeJpeg('z-early.jpg', '2019:07:14 10:00:00')
 
     const result = await scanDirectory(dir)
-    expect(result.photos.map((p) => p.name)).toEqual(['z-early.jpg', 'a-late.jpg'])
+    // Newest first: the wall opens on the most recent photo.
+    expect(result.photos.map((p) => p.name)).toEqual(['a-late.jpg', 'z-early.jpg'])
   })
 
   it('marks photos without a capture date and sorts them last', async () => {

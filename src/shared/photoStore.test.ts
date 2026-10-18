@@ -17,27 +17,59 @@ function photo(path: string, takenAt: string, name = path.split('/').pop()!): Ph
 }
 
 describe('sortPhotos', () => {
-  it('orders by capture date, oldest first', () => {
-    const result = sortPhotos([photo('/b', '2020-01-05'), photo('/a', '2019-07-14')])
+  it('defaults to newest first', () => {
+    // A photo wall is a stream: the newest photo is the one a user came to see,
+    // so it belongs at the top rather than after years of history.
+    const result = sortPhotos([photo('/a', '2019-07-14'), photo('/b', '2020-01-05')])
+    expect(result.map((p) => p.path)).toEqual(['/b', '/a'])
+  })
+
+  it('orders oldest first when asked', () => {
+    const result = sortPhotos([photo('/b', '2020-01-05'), photo('/a', '2019-07-14')], 'taken-asc')
     expect(result.map((p) => p.path)).toEqual(['/a', '/b'])
   })
 
   it('breaks date ties by name', () => {
-    const result = sortPhotos([
-      photo('/b', '2020-01-05', 'bravo.jpg'),
-      photo('/a', '2020-01-05', 'alpha.jpg')
-    ])
+    const result = sortPhotos(
+      [photo('/b', '2020-01-05', 'bravo.jpg'), photo('/a', '2020-01-05', 'alpha.jpg')],
+      'taken-asc'
+    )
     expect(result.map((p) => p.name)).toEqual(['alpha.jpg', 'bravo.jpg'])
   })
 
-  it('places undated photos last', () => {
-    const result = sortPhotos([photo('/u', ''), photo('/a', '2019-07-14')])
-    expect(result.map((p) => p.path)).toEqual(['/a', '/u'])
+  it('reverses name order for same-day photos in the newest-first mode', () => {
+    // Otherwise the newest day would silently read oldest-first inside itself.
+    const result = sortPhotos(
+      [photo('/a', '2020-01-05', 'alpha.jpg'), photo('/b', '2020-01-05', 'bravo.jpg')],
+      'taken-desc'
+    )
+    expect(result.map((p) => p.name)).toEqual(['bravo.jpg', 'alpha.jpg'])
+  })
+
+  it('places undated photos last in either direction', () => {
+    // They have no position in a timeline, so letting them lead the wall would
+    // put the least informative photos at the very top.
+    for (const mode of ['taken-desc', 'taken-asc'] as const) {
+      const result = sortPhotos([photo('/u', ''), photo('/a', '2019-07-14')], mode)
+      expect(result.map((p) => p.path)).toEqual(['/a', '/u'])
+    }
   })
 
   it('orders undated photos among themselves by name', () => {
     const result = sortPhotos([photo('/z', '', 'zulu.jpg'), photo('/a', '', 'alpha.jpg')])
     expect(result.map((p) => p.name)).toEqual(['alpha.jpg', 'zulu.jpg'])
+  })
+
+  it('sorts by name and ignores the capture date', () => {
+    // The user asked for file names; interleaving by date would look arbitrary.
+    const photos = [photo('/b', '2020-01-05', 'bravo.jpg'), photo('/a', '2019-07-14', 'alpha.jpg')]
+    expect(sortPhotos(photos, 'name-asc').map((p) => p.name)).toEqual(['alpha.jpg', 'bravo.jpg'])
+    expect(sortPhotos(photos, 'name-desc').map((p) => p.name)).toEqual(['bravo.jpg', 'alpha.jpg'])
+  })
+
+  it('sorts undated photos by name in the name modes too', () => {
+    const photos = [photo('/z', '', 'zulu.jpg'), photo('/a', '2019-07-14', 'alpha.jpg')]
+    expect(sortPhotos(photos, 'name-asc').map((p) => p.name)).toEqual(['alpha.jpg', 'zulu.jpg'])
   })
 
   it('does not mutate the input', () => {
@@ -54,8 +86,15 @@ describe('sortPhotos', () => {
 
 describe('upsertPhoto', () => {
   it('inserts a new photo in sorted position', () => {
+    const existing = [photo('/a', '2019-07-14')]
+    // The default is newest first, so the older photo lands at the end.
+    const result = upsertPhoto(existing, photo('/b', '2020-01-05'))
+    expect(result.map((p) => p.path)).toEqual(['/b', '/a'])
+  })
+
+  it('inserts in the order the caller asked for', () => {
     const existing = [photo('/b', '2020-01-05')]
-    const result = upsertPhoto(existing, photo('/a', '2019-07-14'))
+    const result = upsertPhoto(existing, photo('/a', '2019-07-14'), 'taken-asc')
     expect(result.map((p) => p.path)).toEqual(['/a', '/b'])
   })
 
