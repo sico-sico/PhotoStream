@@ -1,0 +1,374 @@
+:root {
+  --bg: #101014;
+  --bg-panel: #1a1a21;
+  --bg-raised: #23232c;
+  --line: #2f2f3a;
+  --text: #e8e8ee;
+  --text-dim: #9a9aa8;
+  --accent: #5b8cff;
+  --danger: #ff6b6b;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.45 system-ui, -apple-system, 'Segoe UI', sans-serif;
+  overflow: hidden;
+}
+
+.app {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* ---------- toolbar ---------- */
+
+.toolbar {
+  position: relative;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+
+.dir-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+.layout-switch {
+  display: flex;
+  gap: 4px;
+  background: var(--bg-raised);
+  padding: 3px;
+  border-radius: 8px;
+}
+
+.toolbar-stats {
+  display: flex;
+  gap: 8px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+
+/* ---------- buttons ---------- */
+
+.button {
+  border: 1px solid var(--line);
+  background: var(--bg-raised);
+  color: var(--text);
+  padding: 6px 12px;
+  border-radius: 7px;
+  cursor: pointer;
+  font: inherit;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.button:hover {
+  background: #2c2c37;
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.button.primary:hover {
+  background: #4b7bf0;
+}
+
+.button.ghost {
+  background: transparent;
+}
+
+.button.ghost.active,
+.button.chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* ---------- filters ---------- */
+
+.filter-panel {
+  position: relative;
+  z-index: 19;
+  padding: 10px 12px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+
+.filter-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.filter-field.grow {
+  flex: 1 1 200px;
+  min-width: 160px;
+}
+
+.filter-field input {
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 6px 8px;
+  font: inherit;
+}
+
+.filter-field input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+
+.filter-summary {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- wall ---------- */
+
+.stage {
+  position: relative;
+  flex: 1 1 auto;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  background:
+    radial-gradient(circle at 30% 20%, #16161d 0%, var(--bg) 60%);
+}
+
+.stage:active {
+  cursor: grabbing;
+}
+
+.world {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.tile {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #1c1c23;
+  contain: layout paint style;
+  user-select: none;
+}
+
+.tile img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* Tiles are already scaled by the container; keep browser smoothing cheap. */
+  image-rendering: auto;
+  pointer-events: none;
+}
+
+.tile.selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.tile-placeholder {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(110deg, #1c1c23 25%, #26262f 50%, #1c1c23 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+.tile-caption {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 14px 6px 4px;
+  font-size: 10px;
+  color: #fff;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.65));
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  font-variant-numeric: tabular-nums;
+}
+
+.tile:hover .tile-caption {
+  opacity: 1;
+}
+
+/* ---------- empty / error ---------- */
+
+.empty-state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+  color: var(--text-dim);
+}
+
+.empty-state h1 {
+  margin: 0;
+  font-size: 28px;
+  letter-spacing: 0.02em;
+  color: var(--text);
+}
+
+.banner.error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: rgba(255, 107, 107, 0.12);
+  border-bottom: 1px solid rgba(255, 107, 107, 0.35);
+  color: var(--danger);
+}
+
+/* ---------- viewer ---------- */
+
+.viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  background: rgba(8, 8, 11, 0.96);
+  backdrop-filter: blur(3px);
+}
+
+.viewer-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px 24px 0;
+  cursor: zoom-out;
+}
+
+.viewer-image {
+  grid-area: 1 / 1;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+  cursor: default;
+}
+
+/* The thumbnail is a stand-in that fades out as the original appears. */
+.viewer-image.preview {
+  filter: blur(2px);
+}
+
+.viewer-image.hidden {
+  opacity: 0;
+}
+
+.viewer-image:not(.ready):not(.preview) {
+  opacity: 0;
+}
+
+.viewer-image.ready {
+  opacity: 1;
+  transition: opacity 0.18s ease;
+}
+
+.viewer-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--line);
+}
+
+.viewer-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.viewer-meta strong {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.viewer-meta span {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
