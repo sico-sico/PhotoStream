@@ -41,7 +41,13 @@ export interface PhotoStreamApi {
   pathForFile: (file: File) => string
   loadSettings: () => Promise<Settings>
   saveSettings: (settings: Settings) => Promise<Settings>
-  thumbUrl: (photo: Photo, level: ThumbLevel) => Promise<string>
+  /**
+   * URL of one rendition.
+   *
+   * `maxEdge` asks for a display-sized rendition instead of the level's fixed
+   * size, so the viewer can receive a bitmap that matches the pixels it paints.
+   */
+  thumbUrl: (photo: Photo, level: ThumbLevel, maxEdge?: number) => Promise<string>
   /**
    * Start resolving many renditions. Results arrive incrementally through
    * `onThumbReady`, so the first tiles appear without waiting for the batch.
@@ -90,7 +96,7 @@ const api: PhotoStreamApi = {
   },
   loadSettings: () => ipcRenderer.invoke(IPC.settingsLoad),
   saveSettings: (settings) => ipcRenderer.invoke(IPC.settingsSave, settings),
-  thumbUrl: (photo, level) => ipcRenderer.invoke(IPC.thumbUrl, photo, level),
+  thumbUrl: (photo, level, maxEdge) => ipcRenderer.invoke(IPC.thumbUrl, photo, level, maxEdge),
   requestThumbs: (photos, level, priority) => ipcRenderer.invoke(IPC.thumbUrls, photos, level, priority),
   onThumbReady: (listener) => {
     const handler = (_event: unknown, entry: [string, string, ThumbLevel]): void => listener(entry)

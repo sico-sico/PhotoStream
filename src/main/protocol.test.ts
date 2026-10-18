@@ -70,6 +70,18 @@ describe('photoUrl', () => {
     expect(photoUrl('a.jpg')).toBe('pic://photo/a.jpg')
   })
 
+  it('preserves nested photo paths as URL segments', async () => {
+    // Recursive scans keep photos below the library root. The viewer must
+    // address that relative path, not just the basename, or Chromium gets a
+    // 404 and the blurred thumbnail remains visible forever.
+    mkdirSync(join(photoDir, 'trip'), { recursive: true })
+    writeFileSync(join(photoDir, 'trip', 'a.jpg'), 'x')
+    const nestedUrl = photoUrl('trip/a.jpg')
+
+    expect(nestedUrl).toBe('pic://photo/trip/a.jpg')
+    expect(resolvePicRequest(nestedUrl, { photoDir, thumbDir })).toBe(join(photoDir, 'trip', 'a.jpg'))
+  })
+
   it('encodes characters that would break the URL', () => {
     const encoded = photoUrl('a#b?.jpg')
     expect(encoded).not.toContain('#')

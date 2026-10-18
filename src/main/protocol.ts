@@ -49,8 +49,9 @@ export function thumbUrl(relativePath: string): string {
 }
 
 /** Build the URL the renderer uses for a full-resolution photo. */
-export function photoUrl(fileName: string): string {
-  return `${PIC_SCHEME}://${PIC_PHOTO_HOST}/${encodeURIComponent(fileName)}`
+export function photoUrl(relativePath: string): string {
+  const encoded = relativePath.split(/[/\\]+/).filter(Boolean).map(encodeURIComponent).join('/')
+  return `${PIC_SCHEME}://${PIC_PHOTO_HOST}/${encoded}`
 }
 
 /**

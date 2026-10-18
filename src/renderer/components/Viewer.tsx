@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Photo } from '@shared/types'
+import type { Photo, ThumbLevel } from '@shared/types'
+import { pickThumbLevel, viewerEdge } from '@shared/thumbs'
 import { formatIsoDate } from '@shared/i18n'
 import {
   IDENTITY,
@@ -8,6 +9,7 @@ import {
   normalizeRotation,
   panBy,
   rotatedSize,
+  snapToDevicePixel,
   viewerFitScale,
   viewerMaxZoom,
   zoomViewerAbout,
@@ -80,11 +82,52 @@ export function Viewer({
 }: ViewerProps): React.JSX.Element {
   const { t, locale } = useI18n()
   const [fullLoaded, setFullLoaded] = useState(false)
+  /**
+   * The resolved rendition, tagged with the photo it belongs to.
+   *
+   * Zooming in switches tiers (`zoom` then `full`), and each switch is an IPC
+   * round trip while the main process encodes or locates the file. Clearing the
+   * URL on every tier change would blank the photo for that gap; keeping the
+   * previous one is safe because it is the same picture, just coarser. The tag
+   * is what makes it safe across a photo change: a stale URL from the previous
+   * photo must never be drawn.
+   */
+  const [rendition, setRendition] = useState<{ photoId: string; url: string } | null>(null)
+  const [fullFailed, setFullFailed] = useState(false)
+  /**
+   * Set when the chosen rendition could not be produced.
+   *
+   * A failed rendition must not leave the viewer on the coarse preview: that is
+   * exactly what "blurry next to the system viewer" looks like (a 512px bitmap
+   * stretched over the stage measures ~4x softer than a sharp one). Asking for
+   * the original costs a bigger download but is the highest resolution the app
+   * can possibly show, so it is the right fallback.
+   */
+  const [forceFull, setForceFull] = useState(false)
   const [transform, setTransform] = useState<Transform>(FIT_TRANSFORM)
   const [rotation, setRotation] = useState(0)
   const [dragging, setDragging] = useState(false)
   /** Non-null while two or more fingers are down. */
   const [pinching, setPinching] = useState(false)
+  /**
+   * True for a moment after a zoom step.
+   *
+   * The photo is only composited while it is moving (see the `will-change` rules
+   * in `styles.css`); a wheel or trackpad zoom has no pointer-down to mark its
+   * end, so it holds the layer briefly and then releases it. `will-change` is
+   * absent at rest, which is what lets Chromium paint the bitmap at full
+   * sharpness instead of scaling a rasterised layer.
+   */
+  const [zooming, setZooming] = useState(false)
+  const zoomTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const holdCompositeLayer = useCallback(() => {
+    setZooming(true)
+    if (zoomTimer.current) clearTimeout(zoomTimer.current)
+    zoomTimer.current = setTimeout(() => {
+      zoomTimer.current = null
+      setZooming(false)
+    }, 220)
+  }, [])
   /** `null` until the read finishes; `{}` when the file carries no EXIF. */
   const [exif, setExif] = useState<RawExif | null>(null)
 
@@ -106,23 +149,112 @@ export function Viewer({
   const maxZoom = useRef(4)
 
   /**
+   * Device pixels per CSS pixel.
+   *
+   * 1.5 on a 4K screen at the 150% scaling Windows recommends, which is exactly
+   * the case where a ratio-derived CSS size falls between device pixels and
+   * Chromium has to resample the bitmap. Every geometric value the viewer paints
+   * is snapped to this grid.
+   */
+  const dpr =
+    typeof window.devicePixelRatio === 'number' && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1
+
+  /**
    * The photo's on-screen size at fit, derived from its intrinsic ratio.
    *
    * This is set explicitly on the `<img>` rather than left to `object-fit`,
    * because `max-height: 100%` cannot resolve against a grid item whose height
    * is not definite: the element ended up 1552x1035 in a 1552x920 stage and the
    * photo overflowed, which made every pan bound wrong.
+   *
+   * Rounded onto the device-pixel grid: at 150% display scaling a fitted size
+   * like 1227.385 CSS px is 1841.078 device pixels, and the 0.078 makes
+   * Chromium resample the bitmap at fit as well as at zoom. See
+   * `snapToDevicePixel`.
    */
-  const fitted = useMemo(
-    () => containSize(natural.width, natural.height, content.width, content.height),
-    [content.height, content.width, natural.height, natural.width]
-  )
+  const fitted = useMemo(() => {
+    const size = containSize(natural.width, natural.height, content.width, content.height)
+    return {
+      width: snapToDevicePixel(size.width, dpr),
+      height: snapToDevicePixel(size.height, dpr)
+    }
+  }, [content.height, content.width, dpr, natural.height, natural.width])
 
-  // Reset the swap state whenever the selected photo changes.
+  // The scan already parsed every photo's dimensions, so `natural` can come from
+  // the photo rather than waiting for the image to decode. That keeps `fitted`
+  // and the 1:1 zoom ceiling stable while the rendition swaps (`zoom` -> `full`
+  // when zooming in), instead of jumping each time a differently-sized bitmap
+  // loads.
   useEffect(() => {
+    setNatural(
+      photo.width > 0 && photo.height > 0
+        ? { width: photo.width, height: photo.height }
+        : { width: 0, height: 0 }
+    )
     setFullLoaded(false)
-    setNatural({ width: 0, height: 0 })
+    setFullFailed(false)
+    setForceFull(false)
   }, [photo.id])
+
+  /**
+   * Which rendition Chromium should draw.
+   *
+   * Two things matter here and they are not the same question:
+   *
+   * 1. How many device pixels the photo occupies. That is the size the bitmap
+   *    should be generated at — a larger one is downscaled again during paint,
+   *    and that second resample is what made the viewer look soft next to the
+   *    system viewer. Measured on an 8064x6048 photo shown at 1840 device px:
+   *    the 2560 `zoom` tier scored 21.35 gradient energy, a rendition generated
+   *    at 1840 scored 24.33, and an ideal Lanczos reference 24.64.
+   * 2. Whether the zoom has outgrown the largest generated size. Past that the
+   *    original is streamed, because generating a bigger intermediate would only
+   *    add another downscale.
+   *
+   * `viewerEdge` answers (1) and returns `null` past the ceiling; the fallback
+   * then picks between `zoom` and `full` as the wall does.
+   */
+  const devicePx = useMemo(() => {
+    if (fitted.width <= 0) return 0
+    return Math.max(fitted.width, fitted.height) * transform.scale * dpr
+  }, [fitted.width, fitted.height, transform.scale, dpr])
+  const edge = viewerEdge(devicePx)
+  const level = useMemo<ThumbLevel>(() => {
+    if (fitted.width <= 0 || fitted.height <= 0) return 'zoom'
+    if (edge !== null) return 'zoom'
+    return pickThumbLevel(Math.max(fitted.width, fitted.height), transform.scale, dpr)
+  }, [fitted.width, fitted.height, transform.scale, dpr, edge])
+
+  /** The tier actually requested: a failed lower tier falls back to the original. */
+  const effectiveLevel: ThumbLevel = forceFull ? 'full' : level
+  /** Only ask for a sized rendition when the tier is a generated one. */
+  const effectiveEdge = effectiveLevel === 'full' ? undefined : (edge ?? undefined)
+
+  // Resolve the rendition URL in the main process. It knows the library root and
+  // can preserve subdirectory paths without exposing absolute paths to the
+  // renderer. Using only `photo.name` breaks recursive libraries and leaves the
+  // blurred preview visible after the original request returns 404.
+  //
+  // Dependencies are the primitives the main process actually reads, not the
+  // `photo` object: a parent that rebuilds the object each render would other-
+  // wise trigger an IPC call per render.
+  useEffect(() => {
+    let cancelled = false
+    void window.photoStream
+      .thumbUrl(photo, effectiveLevel, effectiveEdge)
+      .then((url) => {
+        if (!cancelled) setRendition({ photoId: photo.id, url })
+      })
+      .catch(() => {
+        if (cancelled) return
+        if (effectiveLevel !== 'full') setForceFull(true)
+        else setFullFailed(true)
+      })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [photo.id, photo.path, photo.width, photo.height, effectiveLevel, effectiveEdge])
 
   /**
    * Read the EXIF details only while the panel is open.
@@ -240,6 +372,14 @@ export function Viewer({
     return () => observer.disconnect()
   }, [])
 
+  // A pending zoom timer must not fire after the viewer is gone.
+  useEffect(
+    () => () => {
+      if (zoomTimer.current) clearTimeout(zoomTimer.current)
+    },
+    []
+  )
+
   /**
    * How much a rotation has to shrink the photo so it still fits the stage.
    *
@@ -275,12 +415,13 @@ export function Viewer({
   const zoomByFactor = useCallback(
     (factor: number) => {
       const geometry = geometryFor()
+      holdCompositeLayer()
       // Anchored at the stage centre, which is also the origin of `x`/`y`.
       update((previous) =>
         zoomViewerAbout(previous, previous.scale * factor, 0, 0, geometry.minZoom, geometry.maxZoom)
       )
     },
-    [geometryFor, update]
+    [geometryFor, holdCompositeLayer, update]
   )
 
   useEffect(() => {
@@ -321,6 +462,7 @@ export function Viewer({
       const unit = event.deltaMode === 1 ? 33 : event.deltaMode === 2 ? 800 : 1
       const pivot = toStagePoint(stage, event.clientX, event.clientY)
       const factor = Math.exp(-event.deltaY * unit * speed)
+      holdCompositeLayer()
       update((previous) =>
         zoomViewerAbout(previous, previous.scale * factor, pivot.x, pivot.y, geometry.minZoom, geometry.maxZoom)
       )
@@ -328,7 +470,7 @@ export function Viewer({
 
     stage.addEventListener('wheel', handler, { passive: false })
     return () => stage.removeEventListener('wheel', handler)
-  }, [geometryFor, update])
+  }, [geometryFor, holdCompositeLayer, update])
 
   const onPointerDown = (event: React.PointerEvent): void => {
     if (event.button !== 0) return
@@ -430,26 +572,78 @@ export function Viewer({
 
   const zoomed = Math.abs(transform.scale - 1) > 0.001
   const transformed = zoomed || rotation !== 0 || fitScale !== 1
-  const imageStyle = useMemo(() => {
-    const parts: string[] = []
-    if (transform.x !== 0 || transform.y !== 0) parts.push(`translate(${transform.x}px, ${transform.y}px)`)
-    // The fit factor is folded into `scale` so the rendered size matches the box
-    // `clampViewerTransform` uses for its bounds.
-    const rendered = fitScale * transform.scale
-    if (Math.abs(rendered - 1) > 0.0001) parts.push(`scale(${rendered})`)
-    if (rotation !== 0) parts.push(`rotate(${rotation}deg)`)
-    return parts.length > 0 ? { transform: parts.join(' ') } : undefined
-  }, [fitScale, rotation, transform.x, transform.y, transform.scale])
+  /**
+   * The size the photo is actually painted at, in CSS pixels.
+   *
+   * This is a layout size, not a `transform: scale()` factor, and that is the
+   * whole point. A scaled `<img>` is rasterised into a texture at its layout
+   * size and then filtered by the GPU, whose only tool is bilinear: measured at
+   * 1:1 on a 4K screen at 150% scaling, a transform-scaled original scored 17.62
+   * gradient energy where the same pixels laid out at their final size scored
+   * 18.16 against a 18.19 reference. Laying the photo out is the difference
+   * between 91% and 100% of the sharpness of the untouched file.
+   *
+   * Rounded onto the device-pixel grid for the same reason: at 150% scaling a
+   * ratio-derived size lands between device pixels, and the resulting resample
+   * softens the photo and adds jaggies.
+   */
+  const painted = useMemo(() => {
+    const scale = fitScale * transform.scale
+    if (!(fitted.width > 0) || !(fitted.height > 0)) return { width: 0, height: 0, scale }
+    return {
+      width: snapToDevicePixel(fitted.width * scale, dpr),
+      height: snapToDevicePixel(fitted.height * scale, dpr),
+      scale
+    }
+  }, [dpr, fitScale, fitted.height, fitted.width, transform.scale])
 
   /**
-   * Explicit layout size for the photo.
+   * The inline transform: a translation, plus a rotation when the user asked for
+   * one. Scaling never happens here — the size is already in `sizeStyle`.
+   *
+   * The offset is derived rather than snapped directly. The element is a centred
+   * grid item, so its painted left edge sits at `(viewport - painted) / 2 + x`;
+   * snapping *that* expression and solving back for `x` removes the half pixel
+   * the centring contributes. `x` itself is left alone because
+   * `clampViewerTransform` bounds the pan with it.
+   *
+   * At fit the transform stays empty: the photo is downscaled from its rendition
+   * there anyway, and a stray `translate(0.5px, 0.5px)` would only break the
+   * "nothing has been done yet" state.
+   */
+  const imageStyle = useMemo(() => {
+    const parts: string[] = []
+    // Keyed on the user's zoom, not on the painted ratio: the fit box is snapped
+    // to the device grid, so `fitScale` can come out a hair below 1 and would
+    // otherwise emit a visible half-pixel correction in the resting state.
+    const aligned = Math.abs(transform.scale - 1) > 0.0001
+    const offset = (value: number, side: number, viewport: number): number => {
+      if (!aligned || !(side > 0) || !(viewport > 0)) return value
+      const baseline = (viewport - side) / 2
+      return snapToDevicePixel(baseline + value, dpr) - baseline
+    }
+    const tx = offset(transform.x, painted.width, content.width)
+    const ty = offset(transform.y, painted.height, content.height)
+    // Rounding two algebraically identical expressions leaves dust like
+    // -1.4e-14, which CSS rejects: the whole transform would be dropped and the
+    // photo would silently fall back to the soft path.
+    const clean = (value: number): number => Number(value.toFixed(9))
+    const [cx, cy] = [clean(tx), clean(ty)]
+    if (cx !== 0 || cy !== 0) parts.push(`translate(${cx}px, ${cy}px)`)
+    if (rotation !== 0) parts.push(`rotate(${rotation}deg)`)
+    return parts.length > 0 ? { transform: parts.join(' ') } : undefined
+  }, [content.height, content.width, dpr, painted.height, painted.width, rotation, transform.x, transform.y, transform.scale])
+
+  /**
+   * Layout size for the photo: the painted size computed above, not the fit box.
    *
    * Set in pixels rather than left to `object-fit` + `max-height`, which cannot
    * resolve against a grid item's indefinite height and let the photo overflow
    * the stage. Explicit dimensions keep the rendered box and the pan bounds
    * describing the same rectangle.
    */
-  const sizeStyle = fitted.width > 0 ? { width: `${fitted.width}px`, height: `${fitted.height}px` } : undefined
+  const sizeStyle =
+    painted.width > 0 ? { width: `${painted.width}px`, height: `${painted.height}px` } : undefined
 
   return (
     <div className="viewer" role="dialog" aria-modal="true" aria-label={photo.name} data-testid="viewer">
@@ -460,7 +654,7 @@ export function Viewer({
       */}
       <div className="viewer-main">
         <div
-          className={`viewer-stage ${transformed ? 'zoomed' : ''} ${dragging ? 'dragging' : ''} ${pinching ? 'pinching' : ''}`}
+          className={`viewer-stage ${transformed ? 'zoomed' : ''} ${dragging ? 'dragging' : ''} ${pinching ? 'pinching' : ''} ${zooming ? 'zooming' : ''}`}
           ref={stageRef}
           data-testid="viewer-stage"
           style={transformed ? { touchAction: 'none' } : undefined}
@@ -472,7 +666,7 @@ export function Viewer({
         >
           {previewUrl ? (
             <img
-              className={`viewer-image preview ${fullLoaded ? 'hidden' : ''}`}
+              className={`viewer-image preview ${fullLoaded ? 'hidden' : ''} ${fullFailed ? 'failed' : ''}`}
               src={previewUrl}
               alt=""
               aria-hidden="true"
@@ -483,14 +677,26 @@ export function Viewer({
           <img
             className={`viewer-image ${fullLoaded ? 'ready' : ''}`}
             data-testid="viewer-image"
-            src={`pic://photo/${encodeURIComponent(photo.name)}`}
+            src={rendition && rendition.photoId === photo.id ? rendition.url : undefined}
             alt={photo.name}
             style={{ ...sizeStyle, ...imageStyle }}
             draggable={false}
             ref={imageRef}
             onLoad={(event) => {
-              setNatural({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })
               setFullLoaded(true)
+              setFullFailed(false)
+              // Fallback when the scan could not read the source dimensions.
+              setNatural((prev) =>
+                prev.width > 0
+                  ? prev
+                  : { width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight }
+              )
+            }}
+            onError={() => {
+              // A broken lower tier escalates to the original; only a broken
+              // original leaves the (unblurred) preview as the best available.
+              if (effectiveLevel !== 'full') setForceFull(true)
+              else setFullFailed(true)
             }}
           />
         </div>

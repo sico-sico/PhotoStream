@@ -14,6 +14,7 @@ import {
   panBy,
   rotatedSize,
   screenToWorld,
+  snapToDevicePixel,
   transformsEqual,
   viewerFitScale,
   visibleWorldRect,
@@ -574,5 +575,31 @@ describe('transformsEqual', () => {
     expect(transformsEqual(IDENTITY, { scale: 1.0000001, x: 0, y: 0 })).toBe(true)
     expect(transformsEqual(IDENTITY, { scale: 1.1, x: 0, y: 0 })).toBe(false)
     expect(transformsEqual(IDENTITY, { scale: 1, x: 5, y: 0 })).toBe(false)
+  })
+})
+
+describe('snapToDevicePixel', () => {
+  it('rounds a CSS size onto whole device pixels', () => {
+    // 1227.385 CSS px at 150% scaling is 1841.078 device px, the case that made
+    // a 1:1 photo look resampled.
+    expect(snapToDevicePixel(1227.385, 1.5) * 1.5).toBeCloseTo(1841, 10)
+    expect(snapToDevicePixel(666.6667, 1)).toBe(667)
+    expect(snapToDevicePixel(1000, 1.5)).toBe(1000)
+  })
+
+  it('leaves values alone when there is nothing to snap', () => {
+    // A nonsensical ratio must not divide by zero or return NaN.
+    expect(snapToDevicePixel(12.3, 0)).toBe(12.3)
+    expect(snapToDevicePixel(12.3, -2)).toBe(12.3)
+    expect(snapToDevicePixel(Number.NaN, 1.5)).toBeNaN()
+    expect(snapToDevicePixel(Number.POSITIVE_INFINITY, 1.5)).toBe(Number.POSITIVE_INFINITY)
+  })
+
+  it('never moves a value by more than half a device pixel', () => {
+    for (const dpr of [1, 1.25, 1.5, 2, 3]) {
+      for (const value of [0.3, 17.77, 666.6667, 1227.385, 8063.97]) {
+        expect(Math.abs(snapToDevicePixel(value, dpr) - value) * dpr).toBeLessThanOrEqual(0.5 + 1e-9)
+      }
+    }
   })
 })

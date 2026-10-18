@@ -274,22 +274,42 @@ export class PhotoLibrary {
    *
    * `full` bypasses the cache entirely and streams the original, which is what
    * keeps the wall sharp at high zoom.
+   *
+   * `maxEdge` asks for a display-sized rendition instead of the level's fixed
+   * size. The viewer uses it so the bitmap it receives matches the pixels it
+   * will actually paint: a larger bitmap is downscaled again by Chromium, and
+   * that second resample is the softness that made the viewer look worse than
+   * the system viewer even though it was showing the full original.
    */
-  async thumbUrlFor(photo: Photo, level: ThumbLevel, priority: ThumbPriority = 'interactive'): Promise<string> {
+  async thumbUrlFor(
+    photo: Photo,
+    level: ThumbLevel,
+    priority: ThumbPriority = 'interactive',
+    maxEdge?: number
+  ): Promise<string> {
     if (level === 'full') return photoUrl(relativeTo(this.dir, photo.path))
-    const file = await ensureThumbnail(this.thumbCacheDir, toThumbRequest(photo, level), priority)
+    const file = await ensureThumbnail(
+      this.thumbCacheDir,
+      toThumbRequest(photo, level, maxEdge),
+      priority
+    )
     // Relative, not `basename`: the cache is sharded into `a/b/` subdirectories,
     // and the `pic://thumb` handler resolves the path against the cache root.
     return thumbUrl(relativeTo(this.thumbCacheDir, file))
   }
 }
 
-function toThumbRequest(photo: Photo, level: Exclude<ThumbLevel, 'full'>): ThumbRequest {
+function toThumbRequest(
+  photo: Photo,
+  level: Exclude<ThumbLevel, 'full'>,
+  maxEdge?: number
+): ThumbRequest {
   return {
     sourcePath: photo.path,
     mtimeMs: photo.mtimeMs,
     sizeBytes: photo.sizeBytes,
     level,
+    maxEdge,
     // From the scan, so no extra read is needed to decide whether a `zoom`
     // rendition of this photo would hold more detail than `wall`.
     sourceWidth: photo.width,
@@ -379,7 +399,9 @@ export function registerIpc(deps: IpcDeps): void {
 
   ipcMain.handle(IPC.settingsLoad, () => loadSettings(deps.dataDir))
   ipcMain.handle(IPC.settingsSave, (_event, settings: Settings) => saveSettings(deps.dataDir, settings))
-  ipcMain.handle(IPC.thumbUrl, (_event, photo: Photo, level: ThumbLevel) => deps.library.thumbUrlFor(photo, level))
+  ipcMain.handle(IPC.thumbUrl, (_event, photo: Photo, level: ThumbLevel, maxEdge?: number) =>
+    deps.library.thumbUrlFor(photo, level, 'interactive', maxEdge)
+  )
 
   // Resolve a batch of renditions, streaming each result back as it finishes.
   //

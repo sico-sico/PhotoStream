@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import React from 'react'
-import { render, screen, act, within } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { render, screen, act, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { Photo } from '@shared/types'
 import { I18nProvider } from '../i18n/I18nProvider'
@@ -27,11 +29,34 @@ const photo: Photo = {
  * Node bridge.
  */
 const photoExif = vi.fn(async () => ({ make: 'SONY', model: 'ILCE-7M5', fNumber: 1.8 }))
+/**
+ * Explicitly typed rather than inferred from a default implementation: the tests
+ * below return different URLs (and one returns a promise they resolve by hand),
+ * and an inferred literal union would reject them.
+ *
+ * The mock mirrors the real contract: a `maxEdge` yields a display-sized file
+ * tagged `viewer<edge>`, otherwise the tier's fixed file is served.
+ */
+const thumbUrl = vi.fn<(photo: Photo, level: string, maxEdge?: number) => Promise<string>>(
+  async (_photo, level, maxEdge) => {
+    if (level === 'full') return 'pic://photo/kyoto.jpg'
+    if (maxEdge !== undefined) return `pic://thumb/kyoto-viewer${maxEdge}.webp`
+    return 'pic://thumb/kyoto-zoom.webp'
+  }
+)
 beforeEach(() => {
   photoExif.mockClear()
+  thumbUrl.mockReset()
+  // Same contract as the default implementation above: a `maxEdge` produces a
+  // display-sized file, otherwise the tier's fixed file.
+  thumbUrl.mockImplementation(async (_photo: Photo, level: string, maxEdge?: number) => {
+    if (level === 'full') return 'pic://photo/kyoto.jpg'
+    if (maxEdge !== undefined) return `pic://thumb/kyoto-viewer${maxEdge}.webp`
+    return 'pic://thumb/kyoto-zoom.webp'
+  })
   Object.defineProperty(window, 'photoStream', {
     configurable: true,
-    value: { photoExif }
+    value: { photoExif, thumbUrl }
   })
 })
 
@@ -83,20 +108,73 @@ describe('Viewer', () => {
     expect(screen.getByText(/6000×4000/)).toBeInTheDocument()
   })
 
-  it('renders the cached preview immediately and the original alongside it', () => {
+  it('renders the cached preview immediately and requests a rendition', async () => {
     renderViewer()
     const preview = document.querySelector('img.preview')
     const full = document.querySelector('img:not(.preview)')
 
     expect(preview).toHaveAttribute('src', 'pic://thumb/hash-wall.webp')
-    // The full-resolution image streams through the custom protocol.
-    expect(full?.getAttribute('src')).toContain('pic://photo/')
-    expect(full?.getAttribute('src')).toContain('kyoto.jpg')
+    // With no measured stage the viewer cannot size a rendition, so it falls
+    // back to the fixed `zoom` tier (`maxEdge` undefined).
+    await waitFor(() => expect(full).toHaveAttribute('src', 'pic://thumb/kyoto-zoom.webp'))
+    expect(thumbUrl).toHaveBeenCalledWith(photo, 'zoom', undefined)
   })
 
-  it('hides the preview once the original has loaded', async () => {
+  it('delegates URL construction to the main process', async () => {
+    // The renderer must not build `pic://` URLs from `photo.name` itself — a
+    // recursive library keeps photos in subfolders and only the main process
+    // knows the library root to build the relative path from.
+    renderViewer()
+    await waitFor(() => expect(thumbUrl).toHaveBeenCalled())
+    expect(thumbUrl.mock.calls[0][0]).toEqual(photo)
+    expect(typeof thumbUrl.mock.calls[0][1]).toBe('string')
+    await waitFor(() =>
+      expect(screen.getByTestId('viewer-image')).toHaveAttribute('src', 'pic://thumb/kyoto-zoom.webp')
+    )
+  })
+
+  it('passes the full photo through, so subfolder paths survive', async () => {
+    // A photo two directories down: the viewer has no idea what the library root
+    // is, so it must hand the whole record over rather than reconstruct a path.
+    const nested = { ...photo, path: '/photos/2024/trip/kyoto.jpg' }
+    renderViewer({ photo: nested })
+
+    await waitFor(() => expect(thumbUrl).toHaveBeenCalledWith(nested, 'zoom', undefined))
+    expect(thumbUrl.mock.calls[0][0].path).toBe('/photos/2024/trip/kyoto.jpg')
+  })
+
+  it('falls back to the original when a smaller rendition cannot load', async () => {
+    // Leaving the coarse preview in place is what reads as "blurry". A broken
+    // rendition must escalate to the highest-resolution source available.
+    renderViewer()
+    const full = screen.getByTestId('viewer-image')
+    await waitFor(() => expect(full).toHaveAttribute('src', 'pic://thumb/kyoto-zoom.webp'))
+
+    act(() => full.dispatchEvent(new Event('error')))
+
+    await waitFor(() => expect(thumbUrl).toHaveBeenCalledWith(expect.anything(), 'full', undefined))
+    await waitFor(() => expect(full).toHaveAttribute('src', 'pic://photo/kyoto.jpg'))
+    // The preview is not declared broken: the replacement is on its way.
+    expect(document.querySelector('img.preview')?.className).not.toContain('failed')
+  })
+
+  it('unblurs the cached preview if even the original cannot load', async () => {
+    renderViewer()
+    const full = screen.getByTestId('viewer-image')
+    await waitFor(() => expect(full).toHaveAttribute('src', 'pic://thumb/kyoto-zoom.webp'))
+
+    // First error escalates to the original, second one gives up.
+    act(() => full.dispatchEvent(new Event('error')))
+    await waitFor(() => expect(full).toHaveAttribute('src', 'pic://photo/kyoto.jpg'))
+    act(() => full.dispatchEvent(new Event('error')))
+
+    expect(document.querySelector('img.preview')?.className).toContain('failed')
+  })
+
+  it('hides the preview once the rendition has loaded', async () => {
     renderViewer()
     const full = document.querySelector('img:not(.preview)') as HTMLImageElement
+    await waitFor(() => expect(full).toHaveAttribute('src', 'pic://thumb/kyoto-zoom.webp'))
 
     expect(full.className).not.toContain('ready')
     full.dispatchEvent(new Event('load'))
@@ -260,10 +338,10 @@ describe('Viewer', () => {
   })
 
   /**
-   * jsdom reports every element as 0x0 and never decodes an image, so the viewer
-   * would refuse to zoom (there is nothing to clamp against). These tests stub
-   * the stage measurement and the `naturalWidth`/`naturalHeight` pair that a real
-   * decode would provide.
+   * jsdom reports every element as 0x0, so the viewer would refuse to zoom
+   * (there is nothing to clamp against). These tests stub the stage measurement
+   * and pass the photo's intrinsic size through the `photo` prop, which is where
+   * the viewer reads it from now.
    */
   describe('with a measured stage', () => {
     const originalRect = Element.prototype.getBoundingClientRect
@@ -279,42 +357,100 @@ describe('Viewer', () => {
     })
 
     /**
-     * Load the photo at a given intrinsic size.
-     *
-     * `naturalWidth` is a read-only accessor on a real `<img>`, but jsdom's
-     * images never decode, so it is defined per-element for the test.
+     * The photo's intrinsic size now comes from `photo.width`/`photo.height`
+     * (parsed during the scan), not from the decoded image, so these tests set
+     * the dimensions on the `photo` prop directly instead of faking
+     * `naturalWidth` on a jsdom `<img>` that never decodes.
      */
-    const loadPhoto = (naturalWidth: number, naturalHeight: number): HTMLImageElement => {
-      const image = screen.getByTestId('viewer-image') as HTMLImageElement
-      Object.defineProperty(image, 'naturalWidth', { configurable: true, value: naturalWidth })
-      Object.defineProperty(image, 'naturalHeight', { configurable: true, value: naturalHeight })
-      act(() => {
-        image.dispatchEvent(new Event('load'))
-      })
-      return image
-    }
 
-    const scaleOf = (): number => {
-      const style = screen.getByTestId('viewer-image').style.transform
-      const match = /scale\(([\d.]+)\)/.exec(style)
-      return match ? Number(match[1]) : 1
-    }
+    /**
+     * The magnification the photo is painted at.
+     *
+     * Read from the layout width rather than from a `transform: scale()`: the
+     * viewer puts the painted size in the layout box, because a scaled `<img>`
+     * is filtered by the GPU's bilinear sampler and loses about 9% of the
+     * sharpness of the same pixels laid out at their final size.
+     *
+     * `base` is the unscaled fit width for the photo under test.
+     */
+    const scaleOf = (base = 1000): number =>
+      parseFloat(screen.getByTestId('viewer-image').style.width) / base
 
     it('sizes the photo from its ratio, not from the element box', () => {
       // 3:2 into a 1000x800 stage is limited by width, so the photo ends up
-      // 1000x667 even though the element box would happily be 1000x800.
-      renderViewer()
-      const image = loadPhoto(3000, 2000)
+      // 1000x667 even though the element box would happily be 1000x800. The
+      // height is a whole pixel because the box is snapped to the device grid.
+      renderViewer({ photo: { ...photo, width: 3000, height: 2000 } })
+      const image = screen.getByTestId('viewer-image')
       expect(image.style.width).toBe('1000px')
-      expect(parseFloat(image.style.height)).toBeCloseTo(666.67, 1)
+      expect(parseFloat(image.style.height)).toBe(667)
+    })
+
+    it('paints the photo onto whole device pixels', () => {
+      // At 150% display scaling a CSS pixel is 1.5 device pixels, so a size
+      // derived from a ratio lands between device pixels and Chromium resamples
+      // the bitmap — the softness and jaggies seen next to the system viewer.
+      // Every painted size must therefore be a multiple of 1/1.5 CSS px.
+      const original = window.devicePixelRatio
+      Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 1.5 })
+      try {
+        renderViewer({ photo: { ...photo, width: 3000, height: 2000 } })
+        const image = screen.getByTestId('viewer-image')
+
+        const onGrid = (value: number): number => Math.abs(value * 1.5 - Math.round(value * 1.5))
+        expect(onGrid(parseFloat(image.style.width))).toBeLessThan(1e-6)
+        expect(onGrid(parseFloat(image.style.height))).toBeLessThan(1e-6)
+
+        // Zooming must keep both the size and the offset on the grid, and it must
+        // not use a scale transform: that is the soft path.
+        act(() => {
+          screen
+            .getByTestId('viewer-stage')
+            .dispatchEvent(new WheelEvent('wheel', { deltaY: -100, clientX: 500, clientY: 400, bubbles: true, cancelable: true }))
+        })
+        const zoomed = screen.getByTestId('viewer-image')
+        expect(zoomed.style.transform).not.toContain('scale')
+        const width = parseFloat(zoomed.style.width)
+        const height = parseFloat(zoomed.style.height)
+        expect(onGrid(width)).toBeLessThan(1e-6)
+        expect(onGrid(height)).toBeLessThan(1e-6)
+
+        // What has to land on the grid is where the box ends up on screen, not
+        // the raw translate: the element is centred, so the painted left edge is
+        // `(viewport - painted) / 2 + tx`. A centred box may need no correction
+        // at all, in which case the transform is omitted entirely.
+        const edge = (): { x: number; y: number } => {
+          const [, tx = '0', ty = '0'] =
+            /translate\((-?[\d.]+)px,\s*(-?[\d.]+)px\)/.exec(zoomed.style.transform) ?? []
+          return {
+            x: (1000 - parseFloat(zoomed.style.width)) / 2 + Number(tx),
+            y: (800 - parseFloat(zoomed.style.height)) / 2 + Number(ty)
+          }
+        }
+        expect(onGrid(edge().x)).toBeLessThan(1e-6)
+        expect(onGrid(edge().y)).toBeLessThan(1e-6)
+
+        // A pan of 3 CSS px is 4.5 device px at this ratio, so the box would land
+        // half a device pixel off the grid unless the offset is corrected.
+        const stage = screen.getByTestId('viewer-stage')
+        act(() => {
+          stage.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0, clientX: 500, clientY: 400 }))
+          stage.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, clientX: 503, clientY: 400 }))
+          stage.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: 503, clientY: 400 }))
+        })
+        expect(zoomed.style.transform).toContain('translate')
+        expect(onGrid(edge().x)).toBeLessThan(1e-6)
+        expect(onGrid(edge().y)).toBeLessThan(1e-6)
+      } finally {
+        Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: original })
+      }
     })
 
     it('shrinks a rotated photo so it still fits the stage', () => {
       // 3:2 fitted at 1000x667. Turned upright it is 667 wide and 1000 tall,
       // which overflows an 800px-tall stage, so it must be scaled to 0.8.
       const user = userEvent.setup()
-      renderViewer()
-      loadPhoto(3000, 2000)
+      renderViewer({ photo: { ...photo, width: 3000, height: 2000 } })
 
       act(() => {
         screen.getByRole('button', { name: /rotate right/i }).click()
@@ -329,12 +465,13 @@ describe('Viewer', () => {
     it('keeps a photo that still fits at full size when rotated', () => {
       // 1:1 (1000x1000 into a 1000x800 stage) is limited by height, so rotating
       // it leaves the box unchanged and must not shrink it at all.
-      renderViewer()
-      loadPhoto(1000, 1000)
+      renderViewer({ photo: { ...photo, width: 1000, height: 1000 } })
       act(() => {
         screen.getByRole('button', { name: /rotate right/i }).click()
       })
-      expect(scaleOf()).toBe(1)
+      // 1000x1000 into a 1000x800 stage is limited by height, so the unscaled
+      // fit box is 800x800.
+      expect(scaleOf(800)).toBe(1)
     })
 
     it('does not let the wheel reach the wall behind the overlay', () => {
@@ -377,6 +514,86 @@ describe('Viewer', () => {
       const zoomedIn = scaleOf()
       wheel(100)
       expect(scaleOf()).toBeLessThan(zoomedIn)
+    })
+
+    it('releases the composite layer once a zoom gesture stops', async () => {
+      // `will-change: transform` promotes the photo to its own compositor layer,
+      // where the GPU scales a rasterised texture bilinearly. Keeping it while
+      // the photo is still is exactly what made 1:1 look soft, so the layer is
+      // held only while a gesture runs and dropped afterwards.
+      renderViewer()
+      loadPhotoSeed()
+      act(() => {
+        screen
+          .getByTestId('viewer-stage')
+          .dispatchEvent(new WheelEvent('wheel', { deltaY: -100, clientX: 500, clientY: 400, bubbles: true, cancelable: true }))
+      })
+      expect(screen.getByTestId('viewer-stage').className).toContain('zooming')
+
+      await waitFor(() => expect(screen.getByTestId('viewer-stage').className).not.toContain('zooming'), {
+        timeout: 2000
+      })
+      // The zoom itself must survive releasing the layer.
+      expect(scaleOf()).toBeGreaterThan(1)
+    })
+
+    it('escalates to the original when the zoom outgrows the zoom tier', async () => {
+      // The fix for "the viewer looks blurry next to the system viewer": the
+      // bitmap is generated at the size the photo is painted at, and the true
+      // original is only streamed once the zoom needs more than the largest
+      // generated size holds.
+      renderViewer({ photo: { ...photo, width: 6000, height: 4000 } })
+      const image = screen.getByTestId('viewer-image')
+      // 1000 device px of stage, rounded up to the 256 px bucket.
+      await waitFor(() => expect(image).toHaveAttribute('src', 'pic://thumb/kyoto-viewer1024.webp'))
+      expect(thumbUrl).toHaveBeenCalledWith(expect.anything(), 'zoom', 1024)
+
+      const stage = screen.getByTestId('viewer-stage')
+      act(() => {
+        // One large step: exp(1200 * 0.0018) is well past the ceiling, so the
+        // scale lands on the 1:1 limit rather than depending on event count.
+        stage.dispatchEvent(
+          new WheelEvent('wheel', { deltaY: -1200, clientX: 500, clientY: 400, bubbles: true, cancelable: true })
+        )
+      })
+
+      await waitFor(() => expect(thumbUrl).toHaveBeenCalledWith(expect.anything(), 'full', undefined))
+      await waitFor(() => expect(image).toHaveAttribute('src', 'pic://photo/kyoto.jpg'))
+    })
+
+    it('keeps the previous bitmap on screen while the next tier resolves', async () => {
+      // A tier change is an IPC round trip. Blanking `src` for that gap made the
+      // photo flicker every time the user zoomed across the boundary.
+      let resolveFull: ((url: string) => void) | null = null
+      thumbUrl.mockImplementation((_photo, level, maxEdge) =>
+        level === 'full'
+          ? new Promise<string>((resolve) => {
+              resolveFull = resolve
+            })
+          : Promise.resolve(
+              maxEdge !== undefined
+                ? `pic://thumb/kyoto-viewer${maxEdge}.webp`
+                : 'pic://thumb/kyoto-zoom.webp'
+            )
+      )
+
+      renderViewer({ photo: { ...photo, width: 6000, height: 4000 } })
+      const image = screen.getByTestId('viewer-image')
+      await waitFor(() => expect(image).toHaveAttribute('src', 'pic://thumb/kyoto-viewer1024.webp'))
+
+      const stage = screen.getByTestId('viewer-stage')
+      act(() => {
+        stage.dispatchEvent(
+          new WheelEvent('wheel', { deltaY: -1200, clientX: 500, clientY: 400, bubbles: true, cancelable: true })
+        )
+      })
+
+      // Mid-swap: the old bitmap is still there, so nothing goes blank.
+      await waitFor(() => expect(thumbUrl).toHaveBeenCalledWith(expect.anything(), 'full', undefined))
+      expect(image.getAttribute('src')).toBe('pic://thumb/kyoto-viewer1024.webp')
+
+      act(() => resolveFull?.('pic://photo/kyoto.jpg'))
+      await waitFor(() => expect(image).toHaveAttribute('src', 'pic://photo/kyoto.jpg'))
     })
 
     it('anchors the wheel zoom on the cursor', () => {
@@ -447,12 +664,10 @@ describe('Viewer', () => {
       expect(screen.getByTestId('viewer-image').style.transform).toBe('')
     })
 
-    /** Give the photo a known intrinsic size, synchronously enough for renders. */
+    /** Mark the rendition as loaded so `ready` state is exercised. */
     function loadPhotoSeed(): void {
       const image = screen.getByTestId('viewer-image') as HTMLImageElement
       act(() => {
-        Object.defineProperty(image, 'naturalWidth', { configurable: true, value: 4000 })
-        Object.defineProperty(image, 'naturalHeight', { configurable: true, value: 3200 })
         image.dispatchEvent(new Event('load'))
       })
     }
@@ -670,3 +885,40 @@ describe('Viewer', () => {
     expect(next.className).not.toContain('ready')
   })
 })
+
+/**
+ * Rendering-sharpness rules, read from the stylesheet.
+ *
+ * jsdom applies no CSS, so a declaration cannot be observed on an element; the
+ * shipped file is the only place the rule can be asserted.
+ */
+describe('viewer rendering', () => {
+  const stylesheet = readFileSync(join(__dirname, '..', 'styles.css'), 'utf-8').replace(/\/\*[\s\S]*?\*\//g, '')
+
+  /** The body of the first rule whose selector list contains `selector`. */
+  function cssRule(selector: string): string {
+    for (const match of stylesheet.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const selectors = match[1]
+        .split(',')
+        .map((part) => part.replace(/\s+/g, ' ').trim())
+        .filter((part) => part.length > 0)
+      if (selectors.includes(selector)) return match[2]
+    }
+    throw new Error(`no rule for ${selector}`)
+  }
+
+  it('does not leave the photo on its own compositor layer at rest', () => {
+    // A promoted layer is rasterised once and then scaled by the GPU with
+    // bilinear filtering, which is what made a 1:1 photo look soft and jagged.
+    expect(cssRule('.viewer-image')).not.toMatch(/will-change/)
+  })
+
+  it('composites only while a gesture is running', () => {
+    // Dragging and pinching need the layer for smoothness; a wheel zoom holds it
+    // briefly through `.zooming` and then lets the photo re-rasterise crisply.
+    for (const selector of ['.viewer-stage.dragging .viewer-image', '.viewer-stage.zooming .viewer-image']) {
+      expect(cssRule(selector)).toMatch(/will-change:\s*transform/)
+    }
+  })
+})
+

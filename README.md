@@ -47,7 +47,7 @@ PhotoStream 把一个文件夹的 JPEG 铺成一面可以拖动、缩放的墙�
 
 ## 安装与运行
 
-从 [Releases](https://github.com/sico-sico/PhotoStream/releases) 下载 `PhotoStream-0.1.0-portable-win-x64.zip`，解压后双击 `PhotoStream.exe`，无需安装。
+从 [Releases](https://github.com/sico-sico/PhotoStream/releases) 下载 `PhotoStream-0.1.1-portable-win-x64.zip`，解压后双击 `PhotoStream.exe`，无需安装。
 
 应用把数据写在自己旁边的 `PhotoStreamData/` 里，整个文件夹可以移到别处或 U 盘。
 

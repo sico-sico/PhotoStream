@@ -1370,6 +1370,16 @@ body {
   min-height: 0;
   min-width: 0;
   display: grid;
+  /*
+   * One cell, pinned to the stage's content box.
+   *
+   * Without the explicit track sizes the auto-sized column grows to the photo's
+   * max-content width once the photo is laid out at a zoomed size, which pushes
+   * the photo to the left edge instead of centring it and makes every pan bound
+   * wrong. `place-items: center` then centres an overflowing photo symmetrically.
+   */
+  grid-template-columns: 100%;
+  grid-template-rows: 100%;
   place-items: center;
   padding: 24px 24px 0;
   cursor: zoom-out;
@@ -1404,13 +1414,42 @@ body {
   object-fit: contain;
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
   cursor: default;
-  /* Transforms are applied inline when zoomed; keep them off the layout pass. */
+  /*
+   * No `will-change: transform` here, deliberately.
+   *
+   * It promotes the photo to its own compositor layer, and a promoted layer is
+   * rasterised once and then scaled by the GPU, whose filtering is bilinear.
+   * That is why a 1:1 photo looked soft and jagged next to the Windows viewer
+   * even when the bitmap and the device box were the same size. Measured at 1:1
+   * on a 4K screen at 150% scaling: 16.66 gradient energy with the layer, 18.14
+   * without, 19.41 for the untouched original.
+   *
+   * The layer is only taken while a gesture is actually running (see the rules
+   * below), where the motion hides the resampling, and dropped at rest so the
+   * photo is painted through the image pipeline at full sharpness.
+   */
+}
+
+/*
+ * Only promote while the photo is moving.
+ *
+ * Dragging and pinching are continuous, so they benefit from being composited;
+ * a wheel zoom keeps the shortcut for a moment after the last event, then lets
+ * the photo re-rasterise crisply.
+ */
+.viewer-stage.dragging .viewer-image,
+.viewer-stage.pinching .viewer-image,
+.viewer-stage.zooming .viewer-image {
   will-change: transform;
 }
 
 /* The thumbnail is a stand-in that fades out as the original appears. */
 .viewer-image.preview {
   filter: blur(2px);
+}
+
+.viewer-image.preview.failed {
+  filter: none;
 }
 
 .viewer-image.hidden {

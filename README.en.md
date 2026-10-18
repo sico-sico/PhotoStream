@@ -47,7 +47,7 @@ Good for: skimming a trip you just finished, finding a particular month across s
 
 ## Install and run
 
-Download `PhotoStream-0.1.0-portable-win-x64.zip` from [Releases](https://github.com/sico-sico/PhotoStream/releases), unzip it, and run `PhotoStream.exe`. No installation.
+Download `PhotoStream-0.1.1-portable-win-x64.zip` from [Releases](https://github.com/sico-sico/PhotoStream/releases), unzip it, and run `PhotoStream.exe`. No installation.
 
 The app writes its data to `PhotoStreamData/` beside the exe, so the whole folder can be moved elsewhere or onto a USB drive.
 

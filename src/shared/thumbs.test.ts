@@ -2,11 +2,49 @@ import { describe, expect, it } from 'vitest'
 import {
   THUMB_SHARD_DEPTH,
   THUMB_SIZES,
+  VIEWER_EDGE_BUCKET,
   hash64,
   pickThumbLevel,
   thumbKey,
+  viewerEdge,
   zoomTierAddsDetail
 } from './thumbs'
+
+describe('viewerEdge', () => {
+  it('rounds the display size up to the bucket', () => {
+    // 1840 device px (a 1227 px box at DPR 1.5) becomes 2048. Serving exactly
+    // 1840 would be marginally sharper but would create one cache file per
+    // window size.
+    expect(viewerEdge(1840)).toBe(2048)
+    expect(viewerEdge(1024)).toBe(1024)
+    expect(viewerEdge(1025)).toBe(1280)
+    expect(viewerEdge(1840)! % VIEWER_EDGE_BUCKET).toBe(0)
+  })
+
+  it('does not ask for a rendition below the wall tier', () => {
+    // The `wall` file already holds at least this many pixels and is shared with
+    // the photo wall, so a second file would be duplication.
+    expect(viewerEdge(200)).toBeNull()
+    // At or above the wall size the request is served by the wall file itself
+    // (the tag collapses to `wall`), so the edge is reported rather than null.
+    expect(viewerEdge(300)).toBe(THUMB_SIZES.wall)
+    expect(viewerEdge(THUMB_SIZES.wall)).toBe(THUMB_SIZES.wall)
+  })
+
+  it('gives up past the largest generated size', () => {
+    // Beyond `zoom` the original is the right source: generating a bigger
+    // intermediate would add a downscale instead of removing one.
+    expect(viewerEdge(THUMB_SIZES.zoom + 1)).toBeNull()
+    expect(viewerEdge(THUMB_SIZES.zoom)).toBe(THUMB_SIZES.zoom)
+  })
+
+  it('returns null for sizes that cannot describe a box', () => {
+    expect(viewerEdge(0)).toBeNull()
+    expect(viewerEdge(-5)).toBeNull()
+    expect(viewerEdge(Number.NaN)).toBeNull()
+    expect(viewerEdge(Number.POSITIVE_INFINITY)).toBeNull()
+  })
+})
 
 describe('zoomTierAddsDetail', () => {
   it('says a source below the wall size gains nothing from a zoom rendition', () => {

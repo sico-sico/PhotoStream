@@ -21,7 +21,16 @@ async function allFiles(dir: string): Promise<string[]> {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import sharp from 'sharp'
-import { ensureThumbnail, ensureThumbnails, thumbPath, type ThumbRequest } from './thumbnails'
+import {
+  THUMB_QUALITY,
+  VIEWER_QUALITY,
+  ensureThumbnail,
+  ensureThumbnails,
+  renditionQuality,
+  renditionSize,
+  thumbPath,
+  type ThumbRequest
+} from './thumbnails'
 import { THUMB_SIZES } from '../shared/thumbs'
 
 let cacheDir = ''
@@ -85,6 +94,34 @@ describe('thumbPath', () => {
     // possibly-redundant file costs disk; skipping a needed one leaves the tile
     // permanently soft, which is the worse failure.
     expect(thumbPath(cacheDir, request('zoom'))).toMatch(/-zoom\.webp$/)
+  })
+
+  it('gives a display-sized rendition its own cache entry', () => {
+    // The viewer asks for the size it will paint; that file must never be
+    // confused with the 2560 `zoom` file the photo wall uses.
+    const sized: ThumbRequest = { ...request('zoom'), maxEdge: 2048, sourceWidth: 8064, sourceHeight: 6048 }
+    expect(thumbPath(cacheDir, sized)).toMatch(/-viewer2048\.webp$/)
+    expect(thumbPath(cacheDir, sized)).not.toBe(
+      thumbPath(cacheDir, { ...request('zoom'), sourceWidth: 8064, sourceHeight: 6048 })
+    )
+  })
+
+  it('records the requested edge in the size and quality it reports', () => {
+    const sized: ThumbRequest = { ...request('zoom'), maxEdge: 2048, sourceWidth: 8064, sourceHeight: 6048 }
+    expect(renditionSize(sized)).toBe(2048)
+    expect(renditionQuality(sized)).toBe(VIEWER_QUALITY)
+    // The fixed tiers keep their own values.
+    expect(renditionSize(request('zoom'))).toBe(THUMB_SIZES.zoom)
+    expect(renditionQuality(request('zoom'))).toBe(THUMB_QUALITY.zoom)
+  })
+
+  it('shares the wall file for a small source even when a size is given', () => {
+    // A 300px source cannot fill any rendition, so a display-sized request is
+    // the same file the wall already has.
+    const tinyWall: ThumbRequest = { ...request('wall'), sourceWidth: 300, sourceHeight: 200 }
+    const tinySized: ThumbRequest = { ...request('zoom'), maxEdge: 2048, sourceWidth: 300, sourceHeight: 200 }
+    expect(thumbPath(cacheDir, tinySized)).toBe(thumbPath(cacheDir, tinyWall))
+    expect(renditionSize(tinySized)).toBe(THUMB_SIZES.wall)
   })
 })
 

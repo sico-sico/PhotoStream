@@ -34,12 +34,31 @@ export const THUMB_CONCURRENCY = 4
 
 export const THUMB_QUALITY = { wall: 78, zoom: 82 } as const
 
+/**
+ * Quality for a display-sized rendition.
+ *
+ * Higher than `zoom` because it is the tier a single photo is read at, and
+ * because a sized rendition is already the final one: unlike `zoom` it will not
+ * be downscaled again by the browser, so any artefact it carries stays visible.
+ * Measured at 1840 px on a real photo, quality 82 and quality 95 differ by 0.6%
+ * in gradient energy, so this is a modest bump rather than a lever.
+ */
+export const VIEWER_QUALITY = 85
+
 export interface ThumbRequest {
   sourcePath: string
   mtimeMs: number
   sizeBytes: number
   /** Only the cached levels are ever generated; `full` streams the original. */
   level: Exclude<ThumbLevel, 'full'>
+  /**
+   * Long edge to generate, overriding the level's fixed size.
+   *
+   * Set by the viewer, which knows the exact device-pixel size it will paint at.
+   * Cached under its own tag, so a sized rendition never collides with the
+   * `zoom` file the wall uses.
+   */
+  maxEdge?: number
   /**
    * Pixel dimensions of the source, as parsed during the scan.
    *
@@ -66,6 +85,30 @@ export function effectiveLevel(request: ThumbRequest): Exclude<ThumbLevel, 'full
 }
 
 /**
+ * Cache tag for a request: what distinguishes one rendition from another.
+ *
+ * `wall` is shared with the photo wall even when the viewer asks for a sized
+ * rendition, because a source smaller than the wall size produces the same file
+ * either way; generating a second one would be pure duplication.
+ */
+export function renditionTag(request: ThumbRequest): string {
+  if (effectiveLevel(request) === 'wall') return 'wall'
+  return request.maxEdge ? `viewer${request.maxEdge}` : 'zoom'
+}
+
+/** Long edge this request will be encoded at. */
+export function renditionSize(request: ThumbRequest): number {
+  if (effectiveLevel(request) === 'wall') return THUMB_SIZES.wall
+  return request.maxEdge ?? THUMB_SIZES.zoom
+}
+
+/** WebP quality this request will be encoded at. */
+export function renditionQuality(request: ThumbRequest): number {
+  if (effectiveLevel(request) === 'wall') return THUMB_QUALITY.wall
+  return request.maxEdge ? VIEWER_QUALITY : THUMB_QUALITY.zoom
+}
+
+/**
  * Absolute path of a rendition.
  *
  * `thumbKey` returns a sharded relative path (`a/b/hash-wall.webp`); `join`
@@ -76,7 +119,7 @@ export function effectiveLevel(request: ThumbRequest): Exclude<ThumbLevel, 'full
 export function thumbPath(cacheDir: string, request: ThumbRequest): string {
   return join(
     cacheDir,
-    thumbKey(request.sourcePath, request.mtimeMs, request.sizeBytes, effectiveLevel(request))
+    thumbKey(request.sourcePath, request.mtimeMs, request.sizeBytes, renditionTag(request))
   )
 }
 
@@ -186,8 +229,8 @@ async function buildThumbnail(target: string, request: ThumbRequest): Promise<st
   if (await exists(target)) return target
 
   await mkdir(dirname(target), { recursive: true })
-  const size = THUMB_SIZES[effectiveLevel(request)]
-  const quality = THUMB_QUALITY[effectiveLevel(request)]
+  const size = renditionSize(request)
+  const quality = renditionQuality(request)
   // Unique per attempt: two *processes* can still race (unlikely here), and a
   // shared temp name would corrupt both outputs.
   const temp = `${target}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`

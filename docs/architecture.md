@@ -7,6 +7,7 @@
     - [图片渲染链路](#图片渲染链路)
   - [实现细节](#实现细节)
     - [拖动性能](#拖动性能)
+    - [查看页的 1:1 锐度](#查看页的-11-锐度)
     - [滚动条预取](#滚动条预取)
     - [拖入 / 命令行打开](#拖入--命令行打开)
     - [EXIF 面板：一个被记住的偏好](#exif-面板一个被记住的偏好)
@@ -69,12 +70,17 @@
 |---|---|---|
 | 解码/合成 | Chromium 152（Blink + Skia） | Skia 负责缩放重采样，默认双线性/三线性，不覆盖 `image-rendering` |
 | 元素 | `<img>` | 无 Canvas。`Tile` 带 `decoding="async"`，避免解码阻塞主线程 |
-| 缩放/平移 | CSS `transform: translate3d(...) scale(...)` | 单容器一次变换，走合成器，不触发重排 |
-| 合成提示 | `will-change: transform`、`contain: layout style`、`backface-visibility: hidden` | `contain` 只开 `layout style`：`paint` 会裁掉 hover 的抬升 |
+| 缩放/平移 | 墙：CSS `transform: translate3d(...) scale(...)`；查看页：改**布局尺寸** | 墙面用一个容器变换，走合成器、不触发重排；查看页则必须改布局尺寸，原因见[查看页的 1:1 锐度](#查看页的-11-锐度) |
+| 合成提示 | 墙：`will-change: transform`；查看页：仅在拖动/双指期间提升图层 | 静止的查看页**不能**带 `will-change: transform`，否则位图会被 GPU 双线性重采样 |
+| 像素对齐 | `snapToDevicePixel(value, dpr)` | 150% 显示缩放下 1 CSS px = 1.5 设备像素，比例算出的尺寸几乎必然落在设备像素之间 |
 | 预处理 | `sharp`（libvips） | **主进程**执行，渲染进程只拿成品 WebP |
 | 传输 | `pic://` 自定义协议 | `registerSchemesAsPrivileged` 里开 `standard/secure/stream`，处理器用 `net.fetch(pathToFileURL(...))` 转发，因此**原图支持 Range 请求**，大 JPEG 可以边下边解码 |
 
+查看器的原图 URL 由主进程按**相对图库根目录的路径**生成，例如 `trip/photo.jpg`，不能只传 basename。递归图库里文件名可能重复；只传 `photo.jpg` 会解析到错误位置或 404，查看器就会一直停留在模糊的预览图。渲染进程通过 `thumbUrl(photo, 'full')` 请求 URL，不接触绝对磁盘路径。
+
 **LOD 是我们自己控制的唯一一环**：`wall` 512px、`zoom` 2560px、`full` 原图，由实际显示尺寸和 DPR 推导（见[小图的 zoom 档位是冗余的](#小图的-zoom-档位是冗余的)）。Chromium 只负责把拿到的位图缩放、合成，不会替我们挑分辨率。
+
+**查看页还会按实际绘制尺寸下单**：`viewerEdge(devicePx)` 把显示所需的设备像素向上对齐到 256 的桶，主进程据此生成 `viewer2048` 这类专属档位。给一张要画在 1841 设备像素上的照片发 2560 的位图，Chromium 会再缩一次，那一次重采样正是「比系统看图器糊」的来源。
 
 **查看页用两层 `<img>` 叠加**：先显示缓存缩略图（`preview`），原图 `onLoad` 后预览层淡出。否则原图解码期间是一片空白。
 
@@ -102,6 +108,33 @@
 2. **拖动期间直写 DOM**（`usePanZoom` + `Wall` 的 `applyTransform`）：每帧只改 `style.transform`，松手时提交一次 React 状态。
 
 结果：DOM 瓦片 3226 → 64，帧时间中位数 **17 ms（60 fps）**，p95 17 ms，超时帧 0。
+
+### 查看页的 1:1 锐度
+
+单张查看页曾长期比 Windows 自带的照片查看器糊，在 4K 屏、150% 显示缩放下还带明显锯齿。一条条排除后，最终定位到**三个叠加的原因，全都出在我们这边**，与 Chromium 的图像解码能力无关。
+
+测量方法：打开一张 8064×6048 的原片，滚到 1:1 上限，截取舞台中央 500×340 的一块，与原片同一区域的像素比对。指标是**梯度能量**（相邻像素差的均方根），越高越锐；参考值是原片同一区域用 Lanczos 缩放到位图实际绘制尺寸的结果。
+
+| 版本 | 梯度能量 | 相对原片 |
+|------|---------|---------|
+| 原片参考 | 19.41 | 100% |
+| ① 原图 + `transform: scale()` + `will-change` | 16.66 | 86% |
+| ② 去掉静止时的 `will-change` | 18.14 | 93% |
+| ③ **再改成布局尺寸 + 设备像素对齐（现状）** | **18.96** | **98%** |
+
+三个原因分别是：
+
+1. **`will-change: transform` 把照片提升成独立合成层。** 提升后的图层只光栅化一次，之后的缩放交给 GPU，而 GPU 只会双线性插值——既糊又出锯齿。修复是只在**手势进行时**提升（`.viewer-stage.dragging` / `.pinching` / `.zooming`），静止时撤掉。滚轮缩放没有抬起事件，所以用 `zooming` 类保持 220 ms 后自动释放。
+2. **`transform: scale()` 本身就够损失锐度。** 即使没有 `will-change`，被放大的 `<img>` 仍是先按布局尺寸光栅化、再交给合成器放大。改成把放大后的尺寸直接写进 `width`/`height`，`transform` 只负责位移。这是最反直觉的一条：`scale()` 常被当作「不影响清晰度」的廉价变换，实际对图片并不成立。
+3. **绘制矩形没落在设备像素网格上。** 150% 缩放下 1 CSS px = 1.5 设备像素，按比例算出来的 1227.385 CSS px 等于 1841.078 设备像素——差 0.078 就够 Chromium 把整幅图重采样一遍。`snapToDevicePixel(value, dpr)` 把所有几何值（布局尺寸、位移）对齐到 `1/dpr` 的网格。
+
+对齐的细节：元素是网格居中项，绘制左边缘实际在 `(viewport - painted) / 2 + x`，所以必须对齐**这个表达式**再反解出 `x`（`imageStyle` 里的 `offset`），直接对齐 `x` 无效。此外 `painted` 的尺寸与 `fitScale` 之间存在浮点尘埃，`translate` 里出现 `-1.4e-14` 这类值时 CSS 会整条丢弃变换——因此输出前统一 `toFixed(9)`。
+
+配套改动：舞台的网格必须固定成 `grid-template-columns: 100%; grid-template-rows: 100%`。一旦照片按放大后的尺寸参与布局，`auto` 列会被撑到照片的 max-content 宽度，照片随即贴到左边、所有平移边界随之失效。
+
+**为什么没有引第三方库**：编码质量不是瓶颈（同帧对比 q82 与无损几乎无差），Lanczos 也不缺（`sharp` 默认就用 lanczos3）。真正缺的是让位图尺寸、绘制尺寸和屏幕像素三者重合，这件事不需要额外依赖。
+
+回归防线分三层：`snapToDevicePixel` 的单元测试（含「偏移不超过半个设备像素」的不变量）、查看器测试断言 `transform` 里不出现 `scale(` 且绘制尺寸落在网格上、样式表读取测试禁止 `.viewer-image` 携带 `will-change`。
 
 ### 滚动条预取
 
@@ -287,13 +320,16 @@
 
 ### 缩略图缓存分片
 
-一个缓存目录服务用户打开过的**所有**文件夹，每张照片最多 2 个档位，所以文件数增长比照片数更快。扁平目录在 3 千个文件时还好，到十万级时枚举、删除和资源管理器都会变慢。
+一个缓存目录服务用户打开过的**所有**文件夹，每张照片最多 3 个档位（`wall`、`zoom`，以及查看页按实际绘制尺寸下单的 `viewer<edge>`），所以文件数增长比照片数更快。扁平目录在 3 千个文件时还好，到十万级时枚举、删除和资源管理器都会变慢。
 
 缓存键因此是分层的相对路径（`shared/thumbs.ts` 的 `thumbKey`）：
 
 ```
 thumbs/a/b/<16位hash>-wall.webp
+thumbs/a/b/<16位hash>-viewer2048.webp
 ```
+
+- `viewer<edge>` 的 `edge` 只会是 256 的倍数（`VIEWER_EDGE_BUCKET`），所以窗口尺寸变化不会让缓存无限增长；源图小于 `wall` 档位时这类请求直接复用 `wall` 文件，不额外编码。
 
 - **两级、每级 1 个十六进制字符**，共 256 个叶子目录。分片取自哈希本身，所以同一张照片永远落在同一个目录，查找仍是 O(1)。
 - `thumbKey` 返回**相对路径**（用 `/`），调用方负责建目录和拼 URL。
@@ -338,13 +374,13 @@ Windows 编辑器（记事本、PowerShell）会在 UTF-8 文件前加 BOM，`JS
 
 ```bash
 npm run typecheck        # 同时检查 main/preload 与 renderer
-npm run test             # 1054 个单元/集成测试（59 个文件）
+npm run test             # 1075 个单元/集成测试（59 个文件）
 npm run test:coverage    # 覆盖率门槛：70%
-npm run test:e2e         # 35 个 Playwright 端到端测试
+npm run test:e2e         # 36 个 Playwright 端到端测试
 npm run verify           # 以上全部
 ```
 
-覆盖率（当前）：语句 90.2%、分支 82.4%、函数 89.3%、行 93.1%。
+覆盖率（当前）：语句 90.4%、分支 83.2%、函数 89.9%、行 93.3%。
 
 分层：
 

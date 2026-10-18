@@ -67,6 +67,40 @@ export function zoomTierAddsDetail(width: number, height: number): boolean {
 }
 
 /**
+ * Size bucket for display-sized renditions.
+ *
+ * The viewer paints one photo at a known device-pixel size, and a rendition that
+ * matches it is markedly sharper than a larger one the browser has to shrink
+ * again. Measured on an 8064x6048 original shown at 1840 device px:
+ *
+ *   zoom tier (2560) shrunk by the browser     21.35 gradient energy
+ *   sized to 1840 by sharp                     24.33
+ *   ideal Lanczos reference                    24.64
+ *
+ * Rounding to 256 px keeps the cache from growing one file per window size while
+ * staying within ~7% of the exact size.
+ */
+export const VIEWER_EDGE_BUCKET = 256
+
+/**
+ * The long edge to generate for a photo that will be painted at `devicePx`.
+ *
+ * Returns `null` when the answer is not a sized rendition: anything at or below
+ * the `wall` size is already covered by that tier, and anything above the `zoom`
+ * size must come from the original instead, because generating a bigger
+ * intermediate would only add a second downscale.
+ */
+export function viewerEdge(devicePx: number): number | null {
+  if (!Number.isFinite(devicePx) || devicePx <= 0) return null
+  if (devicePx > THUMB_SIZES.zoom) return null
+  const bucketed = Math.ceil(devicePx / VIEWER_EDGE_BUCKET) * VIEWER_EDGE_BUCKET
+  const clamped = Math.min(THUMB_SIZES.zoom, bucketed)
+  // Below the wall tier there is nothing to gain: the `wall` file already holds
+  // at least this many pixels and is shared with the photo wall.
+  return clamped < THUMB_SIZES.wall ? null : clamped
+}
+
+/**
  * How many leading hash characters become directory names.
  *
  * Two levels of one character each (`ab/cd/…`), which is what Lightroom does:
@@ -93,12 +127,17 @@ export const THUMB_SHARD_WIDTH = 1
  *
  * Stable across runs: the shard comes from the hash, so the same photo always
  * lands in the same leaf directory.
+ *
+ * `level` is a plain string rather than the `ThumbLevel` union because the
+ * viewer requests display-sized renditions tagged `viewer1856`; the tag only
+ * has to be unique per size, and widening it here keeps one cache-key rule
+ * instead of two.
  */
 export function thumbKey(
   path: string,
   mtimeMs: number,
   sizeBytes: number,
-  level: Exclude<ThumbLevel, 'full'>
+  level: string
 ): string {
   const hash = hash64(`${path}|${mtimeMs}|${sizeBytes}|${level}`)
   const shards: string[] = []

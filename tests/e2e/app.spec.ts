@@ -639,13 +639,22 @@ test('zooms and pans inside the viewer', async () => {
   await expect.poll(async () => image.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0)
 
   const transformOf = () => image.evaluate((img: HTMLElement) => img.style.transform)
+  /**
+   * The painted width.
+   *
+   * Zoom is a layout size rather than a `transform: scale()`, because a scaled
+   * `<img>` is filtered by the GPU's bilinear sampler and loses about 9% of the
+   * sharpness of the same pixels laid out at their final size.
+   */
+  const widthOf = () => image.evaluate((img: HTMLElement) => img.getBoundingClientRect().width)
   expect(await transformOf()).toBe('')
+  const fitWidth = await widthOf()
 
-  // Wheel in: the image must actually scale up.
+  // Wheel in: the image must actually grow.
   const box = (await stage.boundingBox())!
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
   await zoomWall(-400)
-  await expect.poll(transformOf).toContain('scale(')
+  await expect.poll(widthOf).toBeGreaterThan(fitWidth * 1.2)
 
   // Drag: the image must move, and the viewer must NOT close (a pan is not a
   // click-to-dismiss).
@@ -668,6 +677,7 @@ test('zooms and pans inside the viewer', async () => {
 
 test('rotates the photo a quarter turn at a time', async () => {
   await useEnglish()
+  await openLibrary()
   // A landscape photo on purpose: turning it upright is what forces a refit.
   await openPhoto('Kyoto')
   const viewer = page.getByRole('dialog')
@@ -728,11 +738,7 @@ test('pinches to zoom inside the viewer', async () => {
 
   const image = page.getByTestId('viewer-image')
   await expect.poll(async () => image.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0)
-  const scaleOf = () =>
-    image.evaluate((img: HTMLElement) => {
-      const match = /scale\(([\d.]+)\)/.exec(img.style.transform)
-      return match ? Number(match[1]) : 1
-    })
+  const widthOf = () => image.evaluate((img: HTMLElement) => img.getBoundingClientRect().width)
 
   // Two synthetic pointers cannot be produced with the mouse API, so the
   // PointerEvents are dispatched directly on the stage. This still exercises the
@@ -761,14 +767,15 @@ test('pinches to zoom inside the viewer', async () => {
     )
   }
 
-  expect(await scaleOf()).toBe(1)
+  expect(await widthOf()).toBeGreaterThan(0)
+  const fitWidth = await widthOf()
 
   await dispatch('pointerdown', 11, cx - 50, cy)
   await dispatch('pointerdown', 12, cx + 50, cy)
   // Spread from 100px to 300px apart: a 3x pinch.
   await dispatch('pointermove', 12, cx + 250, cy)
 
-  await expect.poll(scaleOf).toBeGreaterThan(1)
+  await expect.poll(widthOf).toBeGreaterThan(fitWidth * 1.5)
   await expect(viewer).toBeVisible()
 
   await dispatch('pointerup', 12, cx + 250, cy)
@@ -1369,4 +1376,67 @@ test('drops the outgoing batch out of the bottom of the window', async () => {
 
   await page.keyboard.press('Escape')
   await expect(page.locator('.random-show')).toHaveCount(0)
+})
+
+test('serves a sharp rendition at fit and the full original when zoomed, for a nested photo', async () => {
+  const nestedLibrary = await mkdtemp(join(tmpdir(), 'photostream-e2e-nested-'))
+  const nestedDir = join(nestedLibrary, 'trip')
+  await mkdir(nestedDir, { recursive: true })
+  // Larger than the `zoom` tier so zooming past it must stream the true
+  // original, and stored in a subfolder so the nested-path fix is also on the
+  // line.
+  await writeJpeg(nestedDir, 'Nested original.jpg', '2025:06:12 10:30:00', 4000, 3000)
+
+  try {
+    await useEnglish()
+    await page.locator('.menu-trigger').click()
+    await page.getByRole('checkbox', { name: 'Include photos in subfolders' }).check()
+    await page.keyboard.press('Escape')
+
+    await app.evaluate(async ({ dialog }, dir) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [dir] })
+    }, nestedLibrary)
+    await page.locator('.toolbar-open-main').click()
+    await expect(page.locator('.dir-label')).toHaveText(nestedLibrary)
+    await expect(page.locator('.photo-count')).toHaveText('1/1')
+
+    await page.locator('[data-photo-id]').click()
+    const image = page.getByTestId('viewer-image')
+
+    // At fit the viewer draws a rendition generated for the size the photo is
+    // actually painted at, not the raw original and not the fixed `zoom` tier.
+    // Chromium downscaling a 4000px JPEG is what reads as blurry next to the
+    // system viewer, and a rendition that is too large is downscaled a second
+    // time during paint, which is just as soft.
+    await expect(image).toHaveAttribute('src', /^pic:\/\/thumb\/.*-viewer\d+\.webp$/)
+    await expect
+      .poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth), { timeout: 10_000 })
+      .toBeGreaterThan(512)
+    const aimed = await image.evaluate((img: HTMLImageElement) => ({
+      rendition: img.naturalWidth,
+      painted: img.getBoundingClientRect().width * window.devicePixelRatio
+    }))
+    // One 256 px bucket is the allowed difference between the generated size and
+    // the size on screen.
+    expect(Math.abs(aimed.rendition - aimed.painted)).toBeLessThanOrEqual(256)
+
+    // Zoom in until the rendition would be upscaled; the true original streams.
+    const stage = page.getByTestId('viewer-stage')
+    const box = (await stage.boundingBox())!
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+    const showsOriginal = () =>
+      image.evaluate((img: HTMLImageElement) => img.src.startsWith('pic://photo/'))
+    for (let i = 0; i < 14 && !(await showsOriginal()); i += 1) {
+      await page.mouse.wheel(0, -500)
+    }
+    await expect.poll(showsOriginal).toBe(true)
+    await expect
+      .poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth), { timeout: 10_000 })
+      .toBe(4000)
+
+    await page.keyboard.press('Escape')
+    await expect(page.locator('[data-testid="viewer"]')).toHaveCount(0)
+  } finally {
+    await rm(nestedLibrary, { recursive: true, force: true })
+  }
 })
