@@ -75,6 +75,16 @@ export const en = {
   'viewer.hideInfo': 'Hide details',
   'exif.loading': 'Reading details…',
 
+  'show.enter': 'Random show',
+  'show.enterHint': 'Browse the current folder at random; click a photo to bring it to the centre',
+  'show.exit': 'Leave the random show',
+  'show.exitHint': 'Leave the random show (Esc)',
+  'show.aria': 'Random photo show',
+  'show.paused': 'Paused — move the pointer off a photo to continue',
+  'show.empty': 'No photos to show',
+  'show.emptyHint': 'Open a folder with photos, or widen the current filters.',
+  'show.counter': '{shown} of {total}',
+
   'exif.camera': 'Camera',
   'exif.exposure': 'Exposure',
   'exif.location': 'Location',

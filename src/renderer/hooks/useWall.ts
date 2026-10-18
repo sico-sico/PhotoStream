@@ -80,6 +80,14 @@ export interface UseWall {
    * blank when the animation arrives there.
    */
   prefetchForScroll: (targetY: number) => void
+  /**
+   * Request thumbnails for photos the wall is not mounting.
+   *
+   * The random show draws photos from anywhere in the folder, so the viewport
+   * driven request loop cannot know about them. Requests are deduped by the same
+   * `requested` set the wall uses, so asking for a photo twice is cheap.
+   */
+  ensureThumbs: (photos: readonly Photo[]) => void
   /** Open a folder straight from the recent-folders list. */
   openHistoryEntry: (dir: string) => Promise<void>
   /** Remember whether the viewer's EXIF panel is shown. */
@@ -716,6 +724,19 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
 
   const prefetchForScroll = useCallback((targetY: number) => setScrollTargetY(targetY), [])
 
+  /** Ask for thumbnails the wall's own viewport loop would not cover. */
+  const ensureThumbs = useCallback(
+    (photos: readonly Photo[]) => {
+      const pending = photos.filter((photo) => !requested.current.has(`${photo.id}:${thumbLevel}`))
+      if (pending.length === 0) return
+      for (const photo of pending) requested.current.add(`${photo.id}:${thumbLevel}`)
+      void window.photoStream.requestThumbs(pending, thumbLevel, 'interactive').catch(() => {
+        for (const photo of pending) requested.current.delete(`${photo.id}:${thumbLevel}`)
+      })
+    },
+    [thumbLevel]
+  )
+
   const fitToView = useCallback(
     (size: { width: number; height: number }) => {
       setTransform(fitWallTransform(layout.width, layout.height, size.width, size.height, { maxScale: 1 }))
@@ -766,6 +787,7 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
     chooseFolder,
     openDropped,
     prefetchForScroll,
+    ensureThumbs,
     setRecursive,
     openHistoryEntry,
     removeHistoryEntry,

@@ -52,6 +52,7 @@ function renderToolbar(props: Partial<React.ComponentProps<typeof Toolbar>> = {}
         onSortChange={() => {}}
         onToggleFilters={() => {}}
         onAbout={() => {}}
+        onStartShow={() => {}}
         {...props}
       />
     </I18nProvider>

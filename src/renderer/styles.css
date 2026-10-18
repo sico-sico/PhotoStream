@@ -1,4 +1,4 @@
-:root {
+﻿:root {
   --bg: #101014;
   --bg-panel: #1a1a21;
   --bg-raised: #23232c;
@@ -1510,4 +1510,441 @@ body {
   color: var(--text-dim);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+}
+
+/* ---------- random show ---------- */
+
+/*
+ * A full-window layer of photos hanging in space.
+ *
+ * The geometry — where each photo sits and how big it is — comes from
+ * `shared/random.ts`; everything here is about making that arrangement read as
+ * physical objects rather than as a laid-out grid:
+ *
+ * - each photo has its own resting tilt, so nothing is perfectly level;
+ * - each is turned slightly in 3D (`rotateX`/`rotateY`) under a shared
+ *   perspective, so the far edge of a photo is genuinely shorter than the near
+ *   one and a highlight sweeps across it as it moves;
+ * - each floats on its own period and phase, so the group never pulses in
+ *   unison, which is the single biggest cue that an animation is fake;
+ * - depth drives scale, opacity, blur, shadow and distance together, so a photo
+ *   that is "further away" is not merely smaller;
+ * - shadows are long and soft, because a hard shadow pastes the photo onto the
+ *   wall while a soft one lifts it off.
+ */
+.random-show {
+  position: fixed;
+  inset: 0;
+  z-index: 140;
+  overflow: hidden;
+  background: radial-gradient(ellipse at 50% 42%, #1b1b26 0%, #101017 42%, #08080b 100%);
+  animation: random-show-in 260ms ease-out;
+  /* A very slight vignette pulls the eye to the centre photo. */
+  box-shadow: inset 0 0 220px 60px rgba(0, 0, 0, 0.55);
+  /*
+   * The 3D camera.
+   *
+   * Everything inside is transformed relative to this one vanishing point, so all
+   * the photos share a single viewpoint and read as one scene rather than as
+   * separate cards each with their own perspective. 1400px is deliberately long:
+   * a short perspective distorts the corners badly at these tilt angles, and the
+   * effect wanted here is "hanging in a room", not "fisheye".
+   */
+  perspective: 1400px;
+  perspective-origin: 50% 50%;
+  transform-style: preserve-3d;
+}
+
+@keyframes random-show-in {
+  from {
+    opacity: 0;
+    transform: scale(1.015);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/*
+ * Two slow, out-of-sync glows behind everything.
+ *
+ * They drift at different periods so the backdrop never repeats visibly, which
+ * gives the photos something moving to sit in front of. `filter: blur` on two
+ * large radial gradients is cheaper than an actual blur of a layer.
+ */
+.random-show-glow {
+  position: absolute;
+  inset: -20%;
+  pointer-events: none;
+  background:
+    radial-gradient(closest-side at 32% 34%, rgba(91, 140, 255, 0.16), transparent 70%),
+    radial-gradient(closest-side at 70% 66%, rgba(255, 138, 91, 0.11), transparent 70%);
+  filter: blur(60px);
+  animation: random-show-drift 34s ease-in-out infinite alternate;
+}
+
+@keyframes random-show-drift {
+  from {
+    transform: translate3d(-3%, -2%, 0) scale(1);
+  }
+  to {
+    transform: translate3d(4%, 3%, 0) scale(1.08);
+  }
+}
+
+.random-show-bar {
+  position: absolute;
+  inset: 0 0 auto 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  z-index: 3;
+  /* The bar is chrome, not content: it must not stop clicks reaching photos
+     underneath it unless the pointer is actually on a control. */
+  pointer-events: none;
+}
+
+.random-show-bar > * {
+  pointer-events: auto;
+}
+
+.random-show-count,
+.random-show-paused {
+  font-size: 12px;
+  color: var(--text-dim);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+
+.random-show-paused {
+  color: var(--accent);
+}
+
+.random-show-exit {
+  margin-left: auto;
+}
+
+/*
+ * The centred photo.
+ *
+ * Positioned and sized from the reducer's box, so the transitions on `left`/`top`
+ * /`width`/`height` are what make a promotion glide into place. It does not own
+ * the float animation: the box is the layout, the inner element is the object.
+ */
+.random-show-centre {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  transition:
+    left 520ms cubic-bezier(0.22, 0.61, 0.24, 1),
+    top 520ms cubic-bezier(0.22, 0.61, 0.24, 1),
+    width 520ms cubic-bezier(0.22, 0.61, 0.24, 1),
+    height 520ms cubic-bezier(0.22, 0.61, 0.24, 1);
+  /*
+   * Above the ring.
+   *
+   * The small photos are allowed to tuck under the centre's edges, so the subject
+   * has to sit in front of them — otherwise a corner tile would cut into the
+   * photo the user is actually looking at.
+   */
+  z-index: 4;
+}
+
+/*
+ * The floating object.
+ *
+ * A separate node from the positioned box for two reasons: the box is being
+ * transitioned on promotion, and a transform animation on the same element would
+ * compose with that transition unpredictably. `translateZ(0)` promotes it to its
+ * own layer so the animation is composited rather than repainted.
+ */
+.random-show-float {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  transform: translateZ(0);
+  animation: random-show-float var(--float-seconds, 7s) ease-in-out var(--float-delay, 0s) infinite;
+  will-change: transform;
+  /* So the sheen overlay lines up with the photo rather than the frame. */
+  position: relative;
+  transform-style: preserve-3d;
+}
+
+/*
+ * The centre photo's own 3D pose.
+ *
+ * Much shallower than the ring — about a third — because it is the photo being
+ * read: tilting it as far as a background card would make it harder to look at
+ * and would warp straight lines near the edges. It still turns enough for the
+ * sheen to travel across it and for the float to read as depth rather than as a
+ * rectangle sliding up and down.
+ */
+.random-show-float--centre {
+  /* Slower and shallower than the ring: the hero should feel weightier. */
+  --float-seconds: 9.5s;
+  --float-delay: -2s;
+  --tilt-x: -2.2deg;
+  --tilt-y: 3.4deg;
+  --sheen: 0.42;
+  transform: rotateX(var(--tilt-x)) rotateY(var(--tilt-y));
+}
+
+@keyframes random-show-float {
+  0%,
+  100% {
+    transform: rotateX(var(--tilt-x, 0deg)) rotateY(var(--tilt-y, 0deg)) translate3d(0, 0, 0);
+  }
+  50% {
+    transform: rotateX(calc(var(--tilt-x, 0deg) - 0.8deg))
+      rotateY(calc(var(--tilt-y, 0deg) + 1.2deg))
+      translate3d(0, calc(var(--float-lift, -9px)), 0);
+  }
+}
+
+/*
+ * The photo itself.
+ *
+ * `contain` rather than `cover`: the centre photo is the one being looked at, so
+ * nothing may be cropped. The drop shadow is what lifts it off the backdrop —
+ * three stacked shadows at increasing blur approximate a soft area light far
+ * better than a single offset shadow, which reads as a hard copy.
+ */
+.random-show-centre img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+  border-radius: 3px;
+  filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.5)) drop-shadow(0 18px 42px rgba(0, 0, 0, 0.45))
+    drop-shadow(0 34px 80px rgba(0, 0, 0, 0.35));
+  animation: random-show-photo-in 420ms ease-out;
+}
+
+@keyframes random-show-photo-in {
+  from {
+    opacity: 0;
+    filter: brightness(1.25) drop-shadow(0 6px 14px rgba(0, 0, 0, 0.5));
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/*
+ * A small photo in the ring.
+ *
+ * The pose — tilt, float period, phase, depth — arrives as custom properties from
+ * the component, because the keyframe needs them per element and inline styles
+ * cannot parameterise an animation. Redefining the animation on `:hover` is what
+ * lets a photo straighten up when the pointer reaches it.
+ */
+.random-show-thumb {
+  position: absolute;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: var(--bg-raised);
+  cursor: pointer;
+  opacity: var(--depth-opacity, 0.8);
+  filter: blur(var(--depth-blur, 0)) saturate(0.92);
+  /*
+   * The pose, in 3D.
+   *
+   * `rotate` is the in-plane tilt; `rotateX`/`rotateY` are what make it a photo
+   * rather than a rotated rectangle. Order matters: the planar rotation is
+   * applied last so it spins the already-tilted card in its own plane, which is
+   * how a print pinned at an angle actually looks. `translateZ` pushes distant
+   * photos away from the viewer, so the perspective on the parent shortens them
+   * for real instead of only scaling them down.
+   */
+  transform: translateZ(calc(var(--depth-z, 0px))) rotateX(var(--tilt-x, 0deg))
+    rotateY(var(--tilt-y, 0deg)) rotate(var(--pose-rotate, 0deg)) scale(var(--depth-scale, 1));
+  transform-style: preserve-3d;
+  animation: random-show-thumb-float var(--float-seconds, 7s) ease-in-out var(--float-delay, 0s) infinite;
+  transition:
+    left 420ms cubic-bezier(0.22, 0.61, 0.24, 1),
+    top 420ms cubic-bezier(0.22, 0.61, 0.24, 1),
+    width 420ms cubic-bezier(0.22, 0.61, 0.24, 1),
+    height 420ms cubic-bezier(0.22, 0.61, 0.24, 1),
+    opacity 200ms ease,
+    filter 200ms ease,
+    transform 240ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    box-shadow 240ms ease;
+  box-shadow:
+    0 3px 8px rgba(0, 0, 0, 0.4),
+    0 10px 24px rgba(0, 0, 0, 0.35),
+    0 20px 46px rgba(0, 0, 0, 0.28);
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+/*
+ * A faint sheen across the photo.
+ *
+ * This is the detail that sells the 3D: a card turned towards a light source
+ * catches a highlight along the edge facing it, and the highlight moves as the
+ * card turns. It is drawn as an overlay rather than a `filter` so it can be
+ * positioned by the same tilt that turns the card.
+ */
+.random-show-thumb::after,
+.random-show-centre .random-show-float::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(
+    calc(115deg + var(--tilt-y, 0deg) * 2.2),
+    rgba(255, 255, 255, 0.16) 0%,
+    rgba(255, 255, 255, 0.05) 26%,
+    rgba(255, 255, 255, 0) 52%,
+    rgba(0, 0, 0, 0.16) 100%
+  );
+  opacity: var(--sheen, 0.5);
+  mix-blend-mode: soft-light;
+}
+
+/*
+ * The ring's float.
+ *
+ * Three things move at once, all tiny: the card rises and settles, the planar
+ * tilt rocks, and the 3D turn shifts by a degree or two. That last one is what
+ * makes the sheen sweep across the photo — the highlight is anchored to the
+ * card's angle, so as the card turns the light appears to move over it.
+ *
+ * The full pose has to be repeated in every keyframe: `transform` does not
+ * compose across keyframes, so omitting `rotateX`/`rotateY` here would flatten
+ * the photo back into 2D for the duration of the animation.
+ */
+@keyframes random-show-thumb-float {
+  0%,
+  100% {
+    transform: translateZ(calc(var(--depth-z, 0px))) rotateX(var(--tilt-x, 0deg))
+      rotateY(var(--tilt-y, 0deg)) rotate(var(--pose-rotate, 0deg)) scale(var(--depth-scale, 1))
+      translate3d(0, 0, 0);
+  }
+  33% {
+    transform: translateZ(calc(var(--depth-z, 0px)))
+      rotateX(calc(var(--tilt-x, 0deg) + 1.4deg)) rotateY(calc(var(--tilt-y, 0deg) - 1.8deg))
+      rotate(calc(var(--pose-rotate, 0deg) + 0.9deg)) scale(var(--depth-scale, 1))
+      translate3d(0, calc(var(--float-lift, -10px) * 0.6), 0);
+  }
+  66% {
+    transform: translateZ(calc(var(--depth-z, 0px)))
+      rotateX(calc(var(--tilt-x, 0deg) - 1deg)) rotateY(calc(var(--tilt-y, 0deg) + 1.2deg))
+      rotate(calc(var(--pose-rotate, 0deg) - 0.7deg)) scale(var(--depth-scale, 1))
+      translate3d(0, calc(var(--float-lift, -10px) * -0.35), 0);
+  }
+}
+
+.random-show-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: 3px;
+}
+
+/*
+ * Hover: come forward, and hold still.
+ *
+ * Scaling up, straightening and sharpening at once is the gesture of a photo
+ * being picked up. The animation is replaced by `none` so the tilt does not fight
+ * the straightening — otherwise the hover looks like a twitch.
+ *
+ * Stopping the drift matters for more than looks: a photo that is still moving is
+ * a moving target, so the click the user has already decided on can land on a
+ * neighbour. Hovering is the point at which they committed to this one.
+ */
+.random-show-thumb:hover,
+.random-show-thumb:focus-visible {
+  animation: none;
+  opacity: 1;
+  filter: blur(0) saturate(1.05);
+  /*
+   * Picked up and turned to face the viewer.
+   *
+   * The tilts go to zero rather than the whole transform being replaced by a
+   * flat rotation: the photo has to stay in the same 3D space, or it would
+   * visibly pop out of the scene and back in when the pointer leaves. Bringing
+   * `translateZ` forward is what makes it lift towards the viewer.
+   */
+  transform: translateZ(30px) rotateX(0deg) rotateY(0deg) rotate(0deg)
+    scale(calc(var(--depth-scale, 1) * 1.12));
+  --sheen: 0.12;
+  box-shadow:
+    0 6px 14px rgba(0, 0, 0, 0.45),
+    0 18px 40px rgba(0, 0, 0, 0.42),
+    0 36px 72px rgba(0, 0, 0, 0.34);
+  outline: none;
+  /*
+   * Lift above the other small photos, but stay under the centre (z-index 4):
+   * hovering a background photo must not let it cover the subject.
+   */
+  z-index: 3;
+}
+
+.random-show-thumb:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.random-show-placeholder {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(135deg, #23232c, #1a1a21);
+}
+
+.random-show-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  text-align: center;
+  color: var(--text-dim);
+}
+
+.random-show-empty h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+/*
+ * Motion off.
+ *
+ * `prefers-reduced-motion` is a real accessibility setting, not a nicety: the
+ * drifting glow and two dozen independently floating photos is exactly the kind
+ * of ambient movement that makes some people unwell. Everything keeps its pose
+ * and its layout; only the movement stops.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .random-show,
+  .random-show-glow,
+  .random-show-float,
+  .random-show-thumb,
+  .random-show-centre img {
+    animation: none !important;
+  }
+
+  .random-show-centre,
+  .random-show-thumb {
+    transition: none;
+  }
+
+  /* Without the animation the hover cannot override it, so state the pose. */
+  .random-show-thumb:hover,
+  .random-show-thumb:focus-visible {
+    transform: translateZ(20px) rotateX(0deg) rotateY(0deg) rotate(0deg)
+      scale(calc(var(--depth-scale, 1) * 1.08));
+    filter: none;
+  }
 }

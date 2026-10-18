@@ -60,6 +60,15 @@ export interface PhotoStreamApi {
   close: () => Promise<void>
   /** True while the window is maximised, for the toggle button's icon. */
   isMaximized: () => Promise<boolean>
+  /**
+   * Enter or leave OS fullscreen, returning the state afterwards.
+   *
+   * Used by the random show, which is a viewing mode rather than a window
+   * layout: it wants the screen, and it gives it back on exit.
+   */
+  setFullScreen: (on: boolean) => Promise<boolean>
+  /** Whether the window is currently in OS fullscreen. */
+  isFullScreen: () => Promise<boolean>
   onWindowState: (listener: (maximized: boolean) => void) => () => void
   onPhotosChanged: (listener: (payload: unknown) => void) => () => void
   onThumbProgress: (listener: (payload: { done: number; total: number }) => void) => () => void
@@ -94,6 +103,8 @@ const api: PhotoStreamApi = {
   toggleMaximize: () => ipcRenderer.invoke(IPC.windowToggleMaximize),
   close: () => ipcRenderer.invoke(IPC.windowClose),
   isMaximized: () => ipcRenderer.invoke(IPC.windowState),
+  setFullScreen: (on) => ipcRenderer.invoke(IPC.windowFullScreen, on),
+  isFullScreen: () => ipcRenderer.invoke(IPC.windowIsFullScreen),
   onWindowState: (listener) => {
     const handler = (_event: unknown, maximized: boolean): void => listener(maximized)
     ipcRenderer.on(IPC.windowState, handler)

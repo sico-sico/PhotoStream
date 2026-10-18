@@ -435,6 +435,22 @@ export function registerIpc(deps: IpcDeps): void {
   ipcMain.handle(IPC.windowState, (event): boolean => windowOf(event)?.isMaximized() ?? false)
 
   /**
+   * Enter or leave OS fullscreen.
+   *
+   * Returns the resulting state rather than nothing: the renderer restores the
+   * previous mode on exit, and a failed or ignored request has to be visible to
+   * it, or the window would stay fullscreen after the show closes.
+   */
+  ipcMain.handle(IPC.windowFullScreen, (event, on: boolean): boolean => {
+    const window = windowOf(event)
+    if (!window) return false
+    window.setFullScreen(on === true)
+    return window.isFullScreen()
+  })
+
+  ipcMain.handle(IPC.windowIsFullScreen, (event): boolean => windowOf(event)?.isFullScreen() ?? false)
+
+  /**
    * Full EXIF for one photo.
    *
    * The renderer supplies a path, so the request is untrusted: only photos the

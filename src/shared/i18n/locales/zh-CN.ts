@@ -66,6 +66,16 @@ export const zhCN: Catalog = {
   'viewer.hideInfo': '隐藏信息',
   'exif.loading': '正在读取…',
 
+  'show.enter': '随机播放',
+  'show.enterHint': '随机浏览当前文件夹；点任意照片可将其放在中央',
+  'show.exit': '退出随机播放',
+  'show.exitHint': '退出随机播放（Esc）',
+  'show.aria': '随机照片播放',
+  'show.paused': '已暂停——把指针移开小图即可继续',
+  'show.empty': '没有可播放的照片',
+  'show.emptyHint': '请打开一个含照片的文件夹，或放宽筛选条件。',
+  'show.counter': '第 {shown} 张 / 共 {total} 张',
+
   'exif.camera': '相机',
   'exif.exposure': '曝光',
   'exif.location': '位置',

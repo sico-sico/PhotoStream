@@ -1,6 +1,7 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AboutDialog } from './components/AboutDialog'
 import { FilterPanel } from './components/FilterPanel'
+import { RandomShow } from './components/RandomShow'
 import { Toolbar } from './components/Toolbar'
 import { Viewer } from './components/Viewer'
 import { Wall } from './components/Wall'
@@ -40,7 +41,53 @@ export default function App(): React.JSX.Element {
   const viewport = useViewportSize()
   const wall = useWall({ width: viewport.width, height: viewport.height })
   const [filtersOpen, setFiltersOpen] = useState(false)
+  /**
+   * Whether the random show is covering the window.
+   *
+   * Living here rather than in `useWall` because the show is a presentation mode
+   * over the same filtered photo set, not a second view of the library.
+   */
+  const [showOpen, setShowOpen] = useState(false)
   const [systemLocales, setSystemLocales] = useState<string[]>([])
+
+  /**
+   * Take the screen while the show is open, and give it back afterwards.
+   *
+   * Fullscreen is what makes the mode feel like a viewing mode rather than a
+   * dialog. Two details matter:
+   *
+   * - the previous state is captured *before* entering, so a user who was
+   *   already fullscreen is not thrown back into a window;
+   * - leaving is driven by the effect's cleanup, so every way out — the exit
+   *   button, Escape, or the user pressing F11 — restores it. Restoring only in
+   *   the click handler would leave the window stuck fullscreen on Escape.
+   */
+  const wasFullScreen = useRef<boolean | null>(null)
+  useEffect(() => {
+    if (!showOpen) return
+    let cancelled = false
+    void (async () => {
+      try {
+        // Enter fullscreen and read back what it was before. The IPC returns the
+        // state *after* the change, so the previous value has to be promised by
+        // the first call: `setFullScreen` is idempotent, and asking for `true`
+        // when already fullscreen is a no-op.
+        const alreadyFullScreen = await window.photoStream.isFullScreen()
+        if (cancelled) return
+        wasFullScreen.current = alreadyFullScreen
+        await window.photoStream.setFullScreen(true)
+      } catch {
+        // Fullscreen is a nicety; the show works in a window.
+      }
+    })()
+    return () => {
+      cancelled = true
+      if (wasFullScreen.current === null) return
+      const restore = wasFullScreen.current
+      wasFullScreen.current = null
+      void window.photoStream.setFullScreen(restore).catch(() => undefined)
+    }
+  }, [showOpen])
 
   // The OS locale list decides the initial language when the user has not
   // picked one. Fetching it is cheap and independent of the photo scan.
@@ -61,7 +108,14 @@ export default function App(): React.JSX.Element {
       systemLocales={systemLocales}
       onLocaleChange={wall.setLocale}
     >
-      <AppView viewport={viewport} wall={wall} filtersOpen={filtersOpen} setFiltersOpen={setFiltersOpen} />
+      <AppView
+        viewport={viewport}
+        wall={wall}
+        filtersOpen={filtersOpen}
+        setFiltersOpen={setFiltersOpen}
+        showOpen={showOpen}
+        setShowOpen={setShowOpen}
+      />
     </I18nProvider>
   )
 }
@@ -70,12 +124,16 @@ function AppView({
   viewport,
   wall,
   filtersOpen,
-  setFiltersOpen
+  setFiltersOpen,
+  showOpen,
+  setShowOpen
 }: {
   viewport: ReturnType<typeof useViewportSize>
   wall: ReturnType<typeof useWall>
   filtersOpen: boolean
   setFiltersOpen: React.Dispatch<React.SetStateAction<boolean>>
+  showOpen: boolean
+  setShowOpen: React.Dispatch<React.SetStateAction<boolean>>
 }): React.JSX.Element {
   const { t } = useI18n()
   const fittedFor = useRef('')
@@ -317,6 +375,8 @@ function AppView({
         onSortChange={wall.setSort}
         onToggleFilters={() => setFiltersOpen((open) => !open)}
         onAbout={() => setAboutOpen(true)}
+        onStartShow={() => setShowOpen(true)}
+        showOpen={showOpen}
       />
 
       {filtersOpen ? (
@@ -402,6 +462,19 @@ function AppView({
       ) : null}
 
       {aboutOpen ? <AboutDialog onClose={() => setAboutOpen(false)} /> : null}
+
+      {/*
+        The random show sits above everything, including the drop overlay: it is
+        a mode, and the only way out is its own button or Escape.
+      */}
+      {showOpen ? (
+        <RandomShow
+          pool={wall.visiblePhotos}
+          thumbUrls={wall.thumbUrls}
+          onShow={wall.ensureThumbs}
+          onClose={() => setShowOpen(false)}
+        />
+      ) : null}
     </div>
   )
 }

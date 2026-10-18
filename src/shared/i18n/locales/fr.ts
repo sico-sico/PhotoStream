@@ -66,6 +66,16 @@ export const fr: Catalog = {
   'viewer.hideInfo': 'Masquer les détails',
   'exif.loading': 'Lecture des détails…',
 
+  'show.enter': 'Diaporama aléatoire',
+  'show.enterHint': 'Parcourir le dossier au hasard ; cliquez une photo pour la centrer',
+  'show.exit': 'Quitter le diaporama',
+  'show.exitHint': 'Quitter le diaporama (Échap)',
+  'show.aria': 'Diaporama aléatoire',
+  'show.paused': 'En pause — éloignez le pointeur d’une photo pour reprendre',
+  'show.empty': 'Aucune photo à afficher',
+  'show.emptyHint': 'Ouvrez un dossier contenant des photos ou élargissez les filtres.',
+  'show.counter': '{shown} sur {total}',
+
   'exif.camera': 'Appareil',
   'exif.exposure': 'Exposition',
   'exif.location': 'Lieu',

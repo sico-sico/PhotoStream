@@ -17,7 +17,9 @@ export const IPC = {
   windowMinimize: 'window:minimize',
   windowToggleMaximize: 'window:toggleMaximize',
   windowClose: 'window:close',
-  windowState: 'window:state'
+  windowState: 'window:state',
+  windowFullScreen: 'window:fullScreen',
+  windowIsFullScreen: 'window:isFullScreen'
 } as const
 
 /** Custom protocol used to stream cached thumbnails and originals to the renderer. */

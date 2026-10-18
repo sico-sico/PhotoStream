@@ -29,6 +29,10 @@ export interface ToolbarProps {
   onSortChange: (sort: SortMode) => void
   onToggleFilters: () => void
   onAbout: () => void
+  /** Opens the full-window random show. */
+  onStartShow: () => void
+  /** Whether the show is already open; the trigger then acts as a toggle. */
+  showOpen?: boolean
 }
 
 const LAYOUTS: ReadonlyArray<{ value: LayoutMode; label: MessageKey; hint: MessageKey }> = [
@@ -55,7 +59,9 @@ export function Toolbar({
   onLayoutChange,
   onSortChange,
   onToggleFilters,
-  onAbout
+  onAbout,
+  onStartShow,
+  showOpen = false
 }: ToolbarProps): React.JSX.Element {
   const { t } = useI18n()
 
@@ -113,6 +119,19 @@ export function Toolbar({
         onClick={onToggleFilters}
       >
         {t('toolbar.filters')}
+      </button>
+
+      <button
+        type="button"
+        className={`button ghost ${showOpen ? 'active' : ''}`}
+        // Nothing to draw from means nothing to show; the button says why
+        // instead of opening an empty screen.
+        disabled={visibleCount === 0}
+        aria-pressed={showOpen}
+        title={t('show.enterHint')}
+        onClick={onStartShow}
+      >
+        {t('show.enter')}
       </button>
 
       <SortPicker sort={sort} onChange={onSortChange} />
