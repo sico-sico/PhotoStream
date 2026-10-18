@@ -164,3 +164,9 @@ New-ItemProperty -Path 'HKCU:\Software\Classes\.jpg\OpenWithProgids' `
 
 MIT
 
+## 关于作者
+
+这个仓库的代码全部由 AI 编写：[GitHub Copilot](https://github.com/features/copilot)，使用 **DeepSeek V4 Flash** 模型。需求、取舍与验收由 [sico-sico](https://github.com/sico-sico) 决定。
+
+应用内的「关于」对话框也写了这一条。
+
