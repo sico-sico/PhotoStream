@@ -65,3 +65,47 @@ export function normalizeDateBound(value: string): string {
   if (!isValidDate(y, m, d)) return ''
   return toIsoDate(y, m, d)
 }
+
+/**
+ * Calendar day of a file's modification time, in the *local* timezone.
+ *
+ * Local, not UTC, because this stands in for "when did this photo come into
+ * being", and the user compares it against the clock on their own wall. Reading
+ * it as UTC would move a photo taken at 23:00 one day forward or back depending
+ * on the offset.
+ *
+ * Returns `''` for a timestamp that cannot be a real date, so a corrupt stat
+ * leaves the photo undated rather than dating it to 1970.
+ */
+export function fileModifiedDate(mtimeMs: number): string {
+  if (!Number.isFinite(mtimeMs) || mtimeMs <= 0) return ''
+  const date = new Date(mtimeMs)
+  if (Number.isNaN(date.getTime())) return ''
+  const year = date.getFullYear()
+  const month = date.getMonth() + 1
+  const day = date.getDate()
+  if (!isValidDate(year, month, day)) return ''
+  return toIsoDate(year, month, day)
+}
+
+/**
+ * Pick the date a photo should be filed under.
+ *
+ * EXIF wins whenever it has a usable value. Otherwise the file's modification
+ * time is used, which is what makes every photo sortable — a PNG exported from
+ * a screenshot tool carries no EXIF at all, and leaving it undated would exile
+ * it to the end of the wall regardless of when it was made.
+ *
+ * Returns both halves because they travel together: the date is only meaningful
+ * to the user alongside where it came from, and the panel states which one it
+ * is rather than presenting an approximation as fact.
+ */
+export function resolvePhotoDate(
+  exifDate: string,
+  mtimeMs: number
+): { takenAt: string; dateSource: 'exif' | 'mtime' | 'none' } {
+  if (exifDate) return { takenAt: exifDate, dateSource: 'exif' }
+  const fromFile = fileModifiedDate(mtimeMs)
+  if (fromFile) return { takenAt: fromFile, dateSource: 'mtime' }
+  return { takenAt: '', dateSource: 'none' }
+}

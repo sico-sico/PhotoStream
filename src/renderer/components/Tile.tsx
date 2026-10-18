@@ -20,7 +20,16 @@ export interface TileProps {
  */
 export const Tile = memo(function Tile({ photo, item, url, selected, square }: TileProps): React.JSX.Element {
   const { t } = useI18n()
-  const takenLabel = photo.takenAt || t('tile.noDate')
+  /*
+   * The tooltip distinguishes a real capture date from one taken off the file.
+   * The caption itself stays a bare date — it is a few characters wide, and the
+   * qualification belongs where there is room for it.
+   */
+  const takenLabel = photo.takenAt
+    ? photo.dateSource === 'mtime'
+      ? `${photo.takenAt} (${t('date.fromFile')})`
+      : photo.takenAt
+    : t('tile.noDate')
 
   return (
     <div

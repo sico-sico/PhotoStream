@@ -38,11 +38,11 @@ describe('resolveDropTarget', () => {
     expect(await resolveDropTarget(photo)).toBe(root)
   })
 
-  it('rejects a file that is not a JPEG', async () => {
+  it('rejects a file that is not a photo', async () => {
     const other = join(root, 'notes.txt')
     await writeFile(other, 'x')
 
-    await expect(resolveDropTarget(other)).rejects.toThrow(/not a folder of JPEG photos/)
+    await expect(resolveDropTarget(other)).rejects.toThrow(/not a folder of photos/)
   })
 
   it('rejects a path that does not exist', async () => {

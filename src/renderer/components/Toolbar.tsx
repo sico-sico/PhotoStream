@@ -18,7 +18,7 @@ export interface ToolbarProps {
   totalCount: number
   /** Recent folders, newest first. */
   history: readonly string[]
-  /** Whether subfolder JPEGs are included. */
+  /** Whether photos in subfolders are included. */
   recursive: boolean
   onRecursiveChange: (recursive: boolean) => void
   /** How many photos the random show rings around the centre one. */

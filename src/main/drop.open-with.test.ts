@@ -47,11 +47,18 @@ describe('resolveOpenTarget', () => {
     expect(await resolveOpenTarget(photo)).toEqual({ dir: root, photo })
   })
 
+  it('accepts a PNG', async () => {
+    const photo = join(root, 'screenshot.PNG')
+    await writeFile(photo, 'x')
+
+    expect(await resolveOpenTarget(photo)).toEqual({ dir: root, photo })
+  })
+
   it('still rejects a non-JPEG file', async () => {
     const other = join(root, 'notes.txt')
     await writeFile(other, 'x')
 
-    await expect(resolveOpenTarget(other)).rejects.toThrow(/not a folder of JPEG photos/)
+    await expect(resolveOpenTarget(other)).rejects.toThrow(/not a folder of photos/)
   })
 })
 

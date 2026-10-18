@@ -1415,6 +1415,16 @@ body {
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
   cursor: default;
   /*
+   * Opaque backdrop, for the one tier that can still carry alpha.
+   *
+   * Generated renditions are flattened onto white before they are written, but
+   * the `full` tier streams the original file — so a PNG shows its transparency
+   * here. Painting white behind it matches what the wall shows and keeps the
+   * photo legible against the dark overlay. Invisible for JPEG, which covers
+   * the box completely.
+   */
+  background: #fff;
+  /*
    * No `will-change: transform` here, deliberately.
    *
    * It promotes the photo to its own compositor layer, and a promoted layer is

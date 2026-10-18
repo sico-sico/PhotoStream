@@ -139,6 +139,20 @@ describe('buildExifSections', () => {
     expect(camera?.fields[0].value).toBe('NIKON Z 6')
   })
 
+  it('states when the date came from the file rather than the camera', () => {
+    // Otherwise a date that changes whenever the file is copied would be shown
+    // as if the camera had recorded it.
+    const sections = buildExifSections({}, { ...fallback, dateSource: 'mtime' })
+    const file = sections.find((s) => s.key === 'exif.file')
+    expect(file?.fields).toContainEqual({ label: 'exif.dateSource', value: 'exif.dateFromFile' })
+  })
+
+  it('does not mention the date source for an EXIF date', () => {
+    const sections = buildExifSections({}, { ...fallback, dateSource: 'exif' })
+    const file = sections.find((s) => s.key === 'exif.file')
+    expect(file?.fields.some((f) => f.label === 'exif.dateSource')).toBe(false)
+  })
+
   it('joins the maker and model when they differ', () => {
     const sections = buildExifSections({ make: 'SONY', model: 'ILCE-7M5' }, fallback)
     expect(sections.find((s) => s.key === 'exif.camera')?.fields[0].value).toBe('SONY ILCE-7M5')

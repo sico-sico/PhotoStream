@@ -48,7 +48,7 @@ export async function resolveOpenTarget(target: string): Promise<OpenTarget> {
   if (info.isDirectory()) return { dir: absolute, photo: '' }
   if (info.isFile() && isSupportedImage(absolute)) return { dir: dirname(absolute), photo: absolute }
 
-  throw new Error(`"${absolute}" is not a folder of JPEG photos.`)
+  throw new Error(`"${absolute}" is not a folder of photos, or a JPEG/PNG file.`)
 }
 
 /**

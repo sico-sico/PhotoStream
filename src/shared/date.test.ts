@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isValidDate, exifDateToIsoDate, normalizeDateBound } from './date'
+import { fileModifiedDate, isValidDate, exifDateToIsoDate, normalizeDateBound, resolvePhotoDate } from './date'
 
 describe('isValidDate', () => {
   it('accepts real dates', () => {
@@ -84,5 +84,37 @@ describe('normalizeDateBound', () => {
     expect(normalizeDateBound('   ')).toBe('')
     expect(normalizeDateBound('2024-02-30')).toBe('')
     expect(normalizeDateBound('11/03/2024')).toBe('')
+  })
+})
+
+describe('fileModifiedDate', () => {
+  it('reads the calendar day in local time', () => {
+    // Midday leaves no room for a timezone offset to move the day.
+    expect(fileModifiedDate(new Date(2019, 6, 14, 12, 0, 0).getTime())).toBe('2019-07-14')
+    expect(fileModifiedDate(new Date(2024, 0, 1, 12, 0, 0).getTime())).toBe('2024-01-01')
+  })
+
+  it('returns empty for a timestamp that cannot be a real date', () => {
+    expect(fileModifiedDate(0)).toBe('')
+    expect(fileModifiedDate(-1)).toBe('')
+    expect(fileModifiedDate(Number.NaN)).toBe('')
+  })
+})
+
+describe('resolvePhotoDate', () => {
+  const mtime = new Date(2021, 4, 12, 12, 0, 0).getTime()
+
+  it('prefers the EXIF date and says so', () => {
+    expect(resolvePhotoDate('2019-07-14', mtime)).toEqual({ takenAt: '2019-07-14', dateSource: 'exif' })
+  })
+
+  it('falls back to the file date when EXIF has none', () => {
+    // A PNG from a screenshot tool carries no EXIF at all; without this the
+    // photo would have no place in the timeline.
+    expect(resolvePhotoDate('', mtime)).toEqual({ takenAt: '2021-05-12', dateSource: 'mtime' })
+  })
+
+  it('reports no date when even the file has none', () => {
+    expect(resolvePhotoDate('', 0)).toEqual({ takenAt: '', dateSource: 'none' })
   })
 })

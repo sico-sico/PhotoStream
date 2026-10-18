@@ -3,7 +3,7 @@ import type { Catalog } from '../messages'
 export const fr: Catalog = {
   'app.title': 'PhotoStream',
   'app.emptyTitle': 'PhotoStream',
-  'app.emptyBody': 'Choisissez un dossier de fichiers JPEG, ou déposez-le sur cette fenêtre, pour créer votre mur.',
+  'app.emptyBody': 'Choisissez un dossier de photos, ou déposez-le sur cette fenêtre, pour créer votre mur.',
   'app.emptyAction': 'Ouvrir un dossier…',
   'app.dropHint': 'Déposez un dossier ou une photo pour l’ouvrir',
   'app.errorRetry': 'Essayer un autre dossier',
@@ -53,6 +53,7 @@ export const fr: Catalog = {
 
   'tile.noDate': 'aucune date de prise de vue',
   'tile.unknownDate': '—',
+  'date.fromFile': 'date du fichier',
 
   'viewer.prev': 'Photo précédente',
   'viewer.next': 'Photo suivante',
@@ -98,12 +99,14 @@ export const fr: Catalog = {
   'exif.fileName': 'Nom du fichier',
   'exif.dimensions': 'Dimensions',
   'exif.software': 'Logiciel',
+  'exif.dateSource': 'Date issue de',
+  'exif.dateFromFile': 'Date de modification du fichier',
 
   'dialog.chooseFolder': 'Choisir un dossier de photos',
 
   'about.title': 'À propos de PhotoStream',
   'about.version': 'Version {version}',
-  'about.description': "Un mur de photos pour un dossier de fichiers JPEG. Analyser, déplacer, zoomer, examiner.",
+  'about.description': "Un mur de photos pour un dossier de photos. Analyser, déplacer, zoomer, examiner.",
   'about.runtime': 'Environnement',
   'about.electron': 'Electron {version}',
   'about.chromium': 'Chromium {version}',

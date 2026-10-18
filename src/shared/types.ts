@@ -1,5 +1,17 @@
-/** Where the capture date came from. `exif` is authoritative; `none` means unknown. */
-export type DateSource = 'exif' | 'none'
+/**
+ * Where a photo's date came from.
+ *
+ * `exif` is authoritative: the camera recorded when the shutter fired.
+ * `mtime` is the fallback — the file's modification time — used for PNGs,
+ * screenshots and anything else exported without EXIF. It is an approximation
+ * and the interface says so, but it is far better than filing a photo under "no
+ * date": every photo then has a place in the timeline instead of a separate
+ * undated pile at the end.
+ *
+ * `none` survives only for a file whose modification time could not be read,
+ * which in practice means the file vanished mid-scan.
+ */
+export type DateSource = 'exif' | 'mtime' | 'none'
 
 export interface Photo {
   /** Stable id derived from the absolute file path. */
@@ -102,7 +114,7 @@ export interface Settings {
    */
   history: string[]
   /**
-   * Whether to include JPEGs in subfolders, recursively.
+   * Whether to include photos in subfolders, recursively.
    *
    * Off by default. A folder is usually one shoot, and pulling in every
    * `_rejected/` and `.cache/` subfolder would bury the photos the user meant.

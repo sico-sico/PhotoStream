@@ -145,6 +145,40 @@ describe('ensureThumbnail', () => {
     expect(metadata.width).toBe(200)
   })
 
+  it('flattens a transparent PNG onto white', async () => {
+    // The wall presents photos as prints; a transparent PNG would otherwise
+    // show the backdrop gradient through the picture, and the cached WebP would
+    // carry an alpha channel it does not need.
+    sourcePath = join(sourceDir, 'transparent.png')
+    await sharp({
+      create: { width: 400, height: 300, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } }
+    })
+      .png()
+      .toFile(sourcePath)
+    const info = await stat(sourcePath)
+    sourceStat = { mtimeMs: info.mtimeMs, size: info.size }
+
+    const file = await ensureThumbnail(cacheDir, request('wall'))
+    const metadata = await sharp(file).metadata()
+    expect(metadata.hasAlpha).toBe(false)
+
+    // Fully transparent input becomes pure white, not black: flattening onto
+    // the wrong background is the classic version of this bug.
+    const { channels } = await sharp(file).stats()
+    const [red, green, blue] = channels
+    expect(red.mean).toBeGreaterThan(250)
+    expect(green.mean).toBeGreaterThan(250)
+    expect(blue.mean).toBeGreaterThan(250)
+  })
+
+  it('leaves an opaque JPEG unchanged by the flatten', async () => {
+    const file = await ensureThumbnail(cacheDir, request('wall'))
+    const metadata = await sharp(file).metadata()
+    // A no-op for a source without alpha, but worth pinning: if it ever gained
+    // an alpha channel the file would grow for nothing.
+    expect(metadata.hasAlpha).toBe(false)
+  })
+
   it('writes only one file for a source smaller than the wall tier', async () => {
     // The saving this is for: a small photo used to cost two encodes and two
     // files for one set of pixels. Asking for both tiers must now leave a single

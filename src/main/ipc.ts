@@ -11,6 +11,7 @@ import type { ThumbPriority } from '../shared/types'
 import { loadSettings, saveSettings } from './settings-store'
 import { watchDirectory, type DirectoryWatcher, type RawWatchEvent } from './watcher'
 import { thumbUrl, photoUrl } from './protocol'
+import { resolvePhotoDate } from '../shared/date'
 import { findPhoto, removePhoto, sortPhotos, upsertPhoto } from '../shared/photoStore'
 import { readImageMetadata, readFullExif } from './metadata'
 import type { MetadataCache } from './metadata-cache'
@@ -195,6 +196,9 @@ export class PhotoLibrary {
       // re-export: without it, the next launch would re-read the 512 KB prefix
       // for a photo that had just been parsed here.
       this.metadataCache?.store(path, info.mtimeMs, info.size, meta)
+      // Same fallback the scan uses: a file re-exported without EXIF must not
+      // lose its date and jump to the undated pile mid-session.
+      const date = resolvePhotoDate(meta.takenAt, info.mtimeMs)
       const photo: Photo = {
         id: path.toLowerCase(),
         path,
@@ -203,8 +207,8 @@ export class PhotoLibrary {
         name: relativeTo(this.dir, path),
         width: meta.width,
         height: meta.height,
-        takenAt: meta.takenAt,
-        dateSource: meta.takenAt ? 'exif' : 'none',
+        takenAt: date.takenAt,
+        dateSource: date.dateSource,
         mtimeMs: info.mtimeMs,
         sizeBytes: info.size
       }

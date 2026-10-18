@@ -122,7 +122,7 @@ export function reducer(state: WallState, action: WallAction): WallState {
         // Recorded here rather than at each call site, so the folder picker, a
         // drop and a restore-from-history all produce the same entry. An empty
         // scan still counts: the folder was opened successfully, it just holds
-        // no JPEGs.
+        // no photos.
         history: addToHistory(state.history, action.dir)
       }
 

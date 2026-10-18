@@ -1,5 +1,5 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, mkdir, writeFile, readFile, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import sharp from 'sharp'
@@ -692,6 +692,16 @@ test('rotates the photo a quarter turn at a time', async () => {
     })
 
   expect(await transformOf()).toBe('')
+  /*
+   * Wait for the photo to be laid out before measuring it.
+   *
+   * The stage's size is measured in a `ResizeObserver` callback, so for one
+   * frame after the overlay mounts the image has no explicit size and its box is
+   * 0x0. Capturing that as the baseline made the axis-swap assertion below
+   * impossible to satisfy — `width < 0` never becomes true — and the test then
+   * failed only when the machine happened to be fast enough to hit the gap.
+   */
+  await expect.poll(async () => (await boxOf()).width).toBeGreaterThan(0)
   const upright = await boxOf()
 
   await page.getByRole('button', { name: 'Rotate right' }).click()
@@ -979,7 +989,7 @@ test('opens a dropped path through the main process', async () => {
   await writeFile(notAPhoto, 'x', 'utf-8')
   await expect(
     page.evaluate((path) => window.photoStream.openDropped(path), notAPhoto)
-  ).rejects.toThrow(/not a folder of JPEG photos/)
+  ).rejects.toThrow(/not a folder of photos/)
 
   await rm(droppedDir, { recursive: true, force: true })
 
@@ -1438,5 +1448,72 @@ test('serves a sharp rendition at fit and the full original when zoomed, for a n
     await expect(page.locator('[data-testid="viewer"]')).toHaveCount(0)
   } finally {
     await rm(nestedLibrary, { recursive: true, force: true })
+  }
+})
+
+test('shows a transparent PNG on white and dates it from the file', async () => {
+  const pngLibrary = await mkdtemp(join(tmpdir(), 'photostream-e2e-png-'))
+  try {
+    // A PNG with no EXIF at all, half transparent and half solid: a screenshot
+    // is the case this support is for.
+    const file = join(pngLibrary, 'Screenshot 2022.png')
+    await sharp({
+      create: { width: 400, height: 300, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } }
+    })
+      .composite([
+        {
+          input: { create: { width: 200, height: 150, channels: 4, background: { r: 200, g: 40, b: 60, alpha: 1 } } },
+          left: 100,
+          top: 75
+        }
+      ])
+      .png()
+      .toFile(file)
+    // Midday, so no timezone offset can move the calendar day.
+    const day = new Date(2022, 8, 3, 12, 0, 0)
+    await utimes(file, day, day)
+
+    await useEnglish()
+    await app.evaluate(async ({ dialog }, dir) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [dir] })
+    }, pngLibrary)
+    await page.locator('.toolbar-open-main').click()
+    await expect(page.locator('.photo-count')).toHaveText('1/1')
+
+    // The only date this file can have is its own modification time, and the
+    // wall must still file it on the timeline rather than in an undated pile.
+    const caption = page.locator('.tile-caption').first()
+    await expect(caption).toHaveText('2022-09-03')
+
+    // The viewer says the date is an approximation instead of presenting it as a
+    // capture time.
+    await page.locator('[data-photo-id]').click()
+    const viewer = page.locator('[data-testid="viewer"]')
+    await expect(viewer).toContainText('(file date)')
+
+    // The wall's rendition is flattened onto white, so the transparent half must
+    // not carry an alpha channel any more. The cache is shared with every other
+    // fixture, so the exact file is located through the URL the tile is showing
+    // rather than by guessing from a directory listing.
+    const src = await page.locator('[data-photo-id] img').first().getAttribute('src')
+    const relative = (src ?? '').replace('pic://thumb/', '').split('/').map(decodeURIComponent)
+    const cached = join(dataDir(), 'thumbs', ...relative)
+    expect(cached).toMatch(/-wall\.webp$/)
+
+    // Read into memory rather than handing the path to sharp: libvips keeps the
+    // file mapped, and on Windows that makes the cache directory undeletable
+    // during teardown. The app itself disables that cache for the same reason.
+    const bytes = await readFile(cached)
+    const flattened = await sharp(bytes).metadata()
+    expect(flattened.hasAlpha).toBe(false)
+    const corner = await sharp(bytes).extract({ left: 1, top: 1, width: 1, height: 1 }).raw().toBuffer()
+    // White, not black: flattening onto the wrong background is the classic
+    // version of this bug, and it looks like a dark smear behind every edge.
+    expect([...corner.subarray(0, 3)]).toEqual([255, 255, 255])
+
+    await page.keyboard.press('Escape')
+    await expect(viewer).toHaveCount(0)
+  } finally {
+    await rm(pngLibrary, { recursive: true, force: true })
   }
 })

@@ -7,6 +7,8 @@
  * formats the result for display.
  */
 
+import type { DateSource } from './types'
+
 /** One labelled row, ready to render. */
 export interface ExifField {
   label: string
@@ -132,7 +134,10 @@ export function formatExposureBias(ev: number | undefined): string {
  * Empty sections are dropped rather than rendered with no rows, so a photo shot
  * on a phone without GPS does not show an empty "Location" heading.
  */
-export function buildExifSections(raw: RawExif, fallback: { fileName: string; width: number; height: number }): ExifSection[] {
+export function buildExifSections(
+  raw: RawExif,
+  fallback: { fileName: string; width: number; height: number; dateSource?: DateSource }
+): ExifSection[] {
   const camera: ExifField[] = []
   const make = clean(raw.make)
   const model = clean(raw.model)
@@ -178,6 +183,15 @@ export function buildExifSections(raw: RawExif, fallback: { fileName: string; wi
       value: fallback.width > 0 && fallback.height > 0 ? `${fallback.width} × ${fallback.height}` : '—'
     }
   ]
+  /*
+   * Where the date came from, but only when it is not the camera.
+   *
+   * A date read from the file's modification time is a stand-in, and presenting
+   * it as a capture time would be a quiet lie: copy a folder, and every photo's
+   * "capture date" changes. Stating the source is enough to keep the fallback
+   * honest without cluttering the panel for the normal EXIF case.
+   */
+  if (fallback.dateSource === 'mtime') file.push({ label: 'exif.dateSource', value: 'exif.dateFromFile' })
   const software = clean(raw.software)
   if (software) file.push({ label: 'exif.software', value: software })
 

@@ -6,7 +6,7 @@ A desktop photo wall for your local photo folders. Portable, offline, writes not
 
 [中文](./README.md) | English
 
-PhotoStream lays out the JPEGs in a folder as a wall you can drag and zoom, for browsing and finding photos. It does not build a library and does not touch your files.
+PhotoStream lays out the photos in a folder (JPEG and PNG) as a wall you can drag and zoom, for browsing and finding photos. It does not build a library and does not touch your files.
 
 Open a folder and a few thousand photos appear on one endless canvas, ordered by EXIF capture time. Drag, zoom, jump to a particular month, or filter down to a date range. Click a photo to open it full-size, then press `←/→` to walk through the rest. When you want to look at something without choosing, switch to the random show and let it cycle for you.
 
@@ -47,7 +47,7 @@ Good for: skimming a trip you just finished, finding a particular month across s
 
 ## Install and run
 
-Download `PhotoStream-0.1.1-portable-win-x64.zip` from [Releases](https://github.com/sico-sico/PhotoStream/releases), unzip it, and run `PhotoStream.exe`. No installation.
+Download `PhotoStream-0.2.0-portable-win-x64.zip` from [Releases](https://github.com/sico-sico/PhotoStream/releases), unzip it, and run `PhotoStream.exe`. No installation.
 
 The app writes its data to `PhotoStreamData/` beside the exe, so the whole folder can be moved elsewhere or onto a USB drive.
 
@@ -96,7 +96,7 @@ Electron 44 has no `postinstall` and downloads its runtime lazily. Both workflow
 
 | | |
 |---|---|
-| Photo wall | Reads the JPEGs in a folder, ordered by EXIF capture time (newest first by default). Drag in any direction, `Ctrl` + wheel zooms around the cursor, bare wheel pans. |
+| Photo wall | Reads the JPEG and PNG files in a folder, ordered by capture time (newest first by default): EXIF when present, otherwise the file's own modification time. Drag in any direction, `Ctrl` + wheel zooms around the cursor, bare wheel pans. |
 | Vertical scrollbar | Proportional positioning; the destination date is shown beside the thumb while dragging; supports `Home`/`End`/`PageUp`/`PageDown`. |
 | Drop to open | Drop a folder or any single photo anywhere on the window. |
 | Open one photo | Drop a photo, or pass a file on the command line: opens its folder, zooms to it, and expands the EXIF panel. |
@@ -204,7 +204,8 @@ Deleting the whole `PhotoStreamData/` restores the initial state. The photos the
 
 ## Known limitations
 
-- JPEG only. HEIC needs an extra decoder (the prebuilt sharp does not include one) and RAW needs a dedicated library.
+- JPEG and PNG only. HEIC needs an extra decoder (the prebuilt sharp does not include one; it reports `Support for this compression format has not been built in: HEVC`) and RAW needs a dedicated library.
+- Photos without an EXIF date fall back to the file's modification time, labelled "file date" in the interface. That is an approximation: copying or re-exporting the file changes it.
 - Windows x64 only. File watching relies on `fs.watch` with `recursive`, which Linux does not support.
 - Nothing is written to the registry, so the app does not appear in the right-click "Open with" menu by default; see [above](#usage) to add it.
 - EXIF dates before 1900 are treated as invalid (usually placeholders or corrupt data).

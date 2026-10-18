@@ -12,7 +12,7 @@
 export const en = {
   'app.title': 'PhotoStream',
   'app.emptyTitle': 'PhotoStream',
-  'app.emptyBody': 'Choose a folder of JPEGs, or drop one onto this window, to build your wall.',
+  'app.emptyBody': 'Choose a folder of photos, or drop one onto this window, to build your wall.',
   'app.emptyAction': 'Open folder…',
   'app.dropHint': 'Drop a folder or a photo to open it',
   'app.errorRetry': 'Try another folder',
@@ -62,6 +62,7 @@ export const en = {
 
   'tile.noDate': 'no capture date',
   'tile.unknownDate': '—',
+  'date.fromFile': 'file date',
 
   'viewer.prev': 'Previous photo',
   'viewer.next': 'Next photo',
@@ -107,12 +108,14 @@ export const en = {
   'exif.fileName': 'File name',
   'exif.dimensions': 'Dimensions',
   'exif.software': 'Software',
+  'exif.dateSource': 'Date from',
+  'exif.dateFromFile': 'File modification time',
 
   'dialog.chooseFolder': 'Choose photo folder',
 
   'about.title': 'About PhotoStream',
   'about.version': 'Version {version}',
-  'about.description': 'A photo wall for a folder of JPEGs. Scan, pan, zoom, inspect.',
+  'about.description': 'A photo wall for a folder of photos. Scan, pan, zoom, inspect.',
   'about.runtime': 'Runtime',
   'about.electron': 'Electron {version}',
   'about.chromium': 'Chromium {version}',

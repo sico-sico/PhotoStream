@@ -240,6 +240,21 @@ async function buildThumbnail(target: string, request: ThumbRequest): Promise<st
       // Honour EXIF orientation even though these exports are already baked.
       .rotate()
       .resize({ width: size, height: size, fit: 'inside', withoutEnlargement: true })
+      /*
+       * Alpha is composited onto white rather than kept.
+       *
+       * The wall presents photos as prints on paper, and a transparent PNG would
+       * show the backdrop gradient through them — a screenshot with rounded
+       * corners would read as a hole rather than as a picture. White also keeps
+       * the cached WebP opaque, which is smaller and decodes faster than the
+       * equivalent alpha file.
+       *
+       * It happens after `resize` on purpose: libvips resamples RGBA in
+       * premultiplied space, so flattening first would let the transparent
+       * pixels' undefined colour bleed into the edges. JPEG input has no alpha,
+       * so this is a no-op for it.
+       */
+      .flatten({ background: '#ffffff' })
       .webp({ quality, effort: 4 })
       .toFile(temp)
     await rename(temp, target)

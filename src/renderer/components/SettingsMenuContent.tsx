@@ -6,7 +6,7 @@ export interface SettingsMenuContentProps {
   onDone: () => void
   /** Opens the About dialog. The menu closes first, so it does not linger above it. */
   onAbout: () => void
-  /** Whether subfolder JPEGs are included. */
+  /** Whether photos in subfolders are included. */
   recursive: boolean
   /**
    * Applied immediately and re-scans the open folder.

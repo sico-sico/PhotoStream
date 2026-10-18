@@ -7,6 +7,7 @@
     - [图片渲染链路](#图片渲染链路)
   - [实现细节](#实现细节)
     - [拖动性能](#拖动性能)
+    - [支持的格式与日期兜底](#支持的格式与日期兜底)
     - [查看页的 1:1 锐度](#查看页的-11-锐度)
     - [滚动条预取](#滚动条预取)
     - [拖入 / 命令行打开](#拖入--命令行打开)
@@ -61,9 +62,9 @@
 **没有专门的渲染引擎**：没有 Canvas、没有 WebGL、没有 PixiJS/Three.js。图片就是普通的 `<img>` 标签，解码与合成全部交给 Electron 内置的 Chromium。这不是省事，而是约束下的正确选择——整个墙面是几千个 DOM 元素，用视口裁剪把挂载点控制在 600 以内，Chromium 的合成器已经足够；换成 Canvas 就得自己实现文字排版、圆角裁剪、命中测试和滚动条联动，而这些现在都是免费的。
 
 ```
-原始 JPEG ──sharp/libvips──▶ WebP 512 / 2560 ──┐
-                                              ├──▶ pic:// ──▶ <img> ──▶ Chromium 解码 ──▶ GPU 合成
-原始 JPEG ────────────────────────────────────┘
+原始 JPEG / PNG ──sharp/libvips──▶ WebP 512 / 2560 / viewer<edge> ──┐
+                                                                  ├──▶ pic:// ──▶ <img> ──▶ Chromium 解码 ──▶ GPU 合成
+原始 JPEG / PNG ─────────────────────────────────────────────────┘
 ```
 
 | 环节 | 技术 | 说明 |
@@ -108,6 +109,41 @@
 2. **拖动期间直写 DOM**（`usePanZoom` + `Wall` 的 `applyTransform`）：每帧只改 `style.transform`，松手时提交一次 React 状态。
 
 结果：DOM 瓦片 3226 → 64，帧时间中位数 **17 ms（60 fps）**，p95 17 ms，超时帧 0。
+
+### 支持的格式与日期兜底
+
+格式白名单只有 JPEG 与 PNG。两者的差别不在「能不能读」，而在代价：
+
+| 输入 | 文件（4000×3000） | 生成 512px WebP | 查看页 `full` 档 |
+|---|---|---|---|
+| JPEG q88 | 2.1 MB | 55 ms | Chromium 直接解 |
+| PNG RGB | 24.9 MB | 169 ms | Chromium 直接解 |
+| PNG RGBA | 26.4 MB | 258 ms | 同上，但要拍平 |
+
+PNG 是无损的，必须解完所有像素才能缩放，没有 JPEG 的 DCT 部分解码可用，所以慢 3–5 倍、大 12 倍。这不影响正确性：`sharp` 原生支持 PNG，`image-size` 从 IHDR 就能拿到宽高（512 KB 前缀绰绰有余），EXIF 与 ICC 也照常能取。`metadata.db` 与缩略图缓存的逻辑一行都不用改。
+
+**HEIC 仍然不支持，而且不是「缺个依赖」那么简单。** 打包的 libvips 只编入了 AV1 解码（`sharp.format.heif` 只认 `.avif`），对 HEIC 会明确报：
+
+```
+heif: Error while loading plugin: Support for this compression format has not
+been built in: HEVC (a suitable decoder plugin is libde265)
+```
+
+更关键的是第二道坎：查看页的 `full` 档**直接把原图流给 `<img>`**，而桌面版 Chromium 不解 HEVC。也就是说 HEIC 即使能生成缩略图，点开仍然是破图，必须为它额外生成全尺寸位图——那是改架构，不是加扩展名。`sharp` 官方支持列表里也没有 HEIC。
+
+**透明通道一律拍平到白底**（`buildThumbnail` 里的 `.flatten({ background: '#ffffff' })`）。墙面把照片当相纸呈现，保留 alpha 会让背景渐变从照片里透出来，圆角截图看起来像个洞；不透明的 WebP 也更小、解码更快。拍平放在 `resize` **之后**：libvips 对 RGBA 做的是预乘重采样，先拍平会让透明像素里未定义的颜色渗进边缘。JPEG 没有 alpha，这一步对它是 no-op。
+
+查看页的 `full` 档流的是原图，PNG 的 alpha 会保留下来，所以 `.viewer-image` 上有一层 `background: #fff` 兜底——否则透明区域露出来的是深色遮罩，和墙面上看到的不一致。
+
+**日期兜底：EXIF 优先，其次文件修改时间。** 照片的 `dateSource` 现在是 `'exif' | 'mtime' | 'none'`：
+
+- `exif` 是权威值，相机记录的快门时刻。
+- `mtime` 是兜底。截图类 PNG 根本没有 EXIF，如果让它们「无日期」，就会被固定排在墙尾，无论实际是什么时候做的。`fileModifiedDate()` 取**本地时区**的日历日，因为用户对照的是自己墙上的时钟。
+- `none` 只在连 mtime 都读不出来时出现，实际意味着文件在扫描过程中消失了。
+
+界面会标明这个近似：查看页底栏写成「2019-07-14 (文件日期)」，缩略图 tooltip 同样，EXIF 面板的「File」分组里多一行「日期来源：文件修改时间」。不标出来才是问题——复制一次文件夹就会改掉所有这类照片的「拍摄日期」，把它当作事实展示是一种安静的欺骗。
+
+缓存里只存 EXIF 的原始结论（`takenAt`），兜底在构造 `Photo` 时计算。这样换策略不会留下过期的派生日期，而缓存键本来就带 `mtime`，两者不会错位。
 
 ### 查看页的 1:1 锐度
 
@@ -374,18 +410,18 @@ Windows 编辑器（记事本、PowerShell）会在 UTF-8 文件前加 BOM，`JS
 
 ```bash
 npm run typecheck        # 同时检查 main/preload 与 renderer
-npm run test             # 1075 个单元/集成测试（59 个文件）
+npm run test             # 1090 个单元/集成测试（59 个文件）
 npm run test:coverage    # 覆盖率门槛：70%
-npm run test:e2e         # 36 个 Playwright 端到端测试
+npm run test:e2e         # 37 个 Playwright 端到端测试
 npm run verify           # 以上全部
 ```
 
-覆盖率（当前）：语句 90.4%、分支 83.2%、函数 89.9%、行 93.3%。
+覆盖率（当前）：语句 90.4%、分支 83.3%、函数 89.9%、行 93.3%。
 
 分层：
 
 - **纯逻辑**（`src/shared`）：布局、变换、裁剪、滚动、筛选、手势、i18n、最近文件夹 — 无 IO，可直接断言。
-- **主进程**（`src/main`）：真实临时目录 + 真实 JPEG，覆盖扫描、递归、EXIF、缩略图、协议安全、文件监听、路径解析。
+- **主进程**（`src/main`）：真实临时目录 + 真实 JPEG/PNG，覆盖扫描、递归、EXIF、缩略图、协议安全、文件监听、路径解析。
 - **渲染层**（`src/renderer`）：React Testing Library，覆盖组件、reducer、拖拽/缩放/拖放 hook。
 - **端到端**（`tests/e2e`）：启动真实 Electron，走完整 IPC + `pic://` 协议 + sharp 链路。
 

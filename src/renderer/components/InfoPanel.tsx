@@ -24,7 +24,15 @@ export function InfoPanel({ photo, exif, onClose }: InfoPanelProps): React.JSX.E
 
   // Loading, and "this file simply has no EXIF", are different states: one shows
   // a placeholder, the other should not pretend something is coming.
-  const sections = exif === null ? null : buildExifSections(exif, { fileName: photo.name, width: photo.width, height: photo.height })
+  const sections =
+    exif === null
+      ? null
+      : buildExifSections(exif, {
+          fileName: photo.name,
+          width: photo.width,
+          height: photo.height,
+          dateSource: photo.dateSource
+        })
 
   return (
     <aside className="info-panel" data-testid="info-panel" aria-label={t('viewer.info')}>

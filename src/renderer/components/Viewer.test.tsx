@@ -143,6 +143,18 @@ describe('Viewer', () => {
     expect(thumbUrl.mock.calls[0][0].path).toBe('/photos/2024/trip/kyoto.jpg')
   })
 
+  it('marks a date that came from the file instead of the camera', () => {
+    // A fallback date changes whenever the file is copied, so it must not be
+    // presented as a capture time.
+    renderViewer({ photo: { ...photo, takenAt: '2022-09-03', dateSource: 'mtime' } })
+    expect(screen.getByText(/\(file date\)/)).toBeInTheDocument()
+  })
+
+  it('leaves an EXIF date unqualified', () => {
+    renderViewer()
+    expect(screen.queryByText(/file date/)).toBeNull()
+  })
+
   it('falls back to the original when a smaller rendition cannot load', async () => {
     // Leaving the coarse preview in place is what reads as "blurry". A broken
     // rendition must escalate to the highest-resolution source available.

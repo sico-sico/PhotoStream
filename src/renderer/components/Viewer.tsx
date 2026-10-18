@@ -712,6 +712,9 @@ export function Viewer({
           <strong dir="auto">{photo.name}</strong>
           <span>
             {photo.takenAt ? formatIsoDate(locale, photo.takenAt) : t('viewer.noDate')}
+            {/* A date read from the file is a stand-in, and saying so is what
+                keeps it from being mistaken for a capture time. */}
+            {photo.dateSource === 'mtime' ? ` (${t('date.fromFile')})` : ''}
             {photo.width > 0 ? ` · ${t('viewer.size', { width: photo.width, height: photo.height })}` : ''}
             {zoomed ? ` · ${Math.round(transform.scale * 100)}%` : ''}
             {rotation !== 0 ? ` · ${rotation}°` : ''}

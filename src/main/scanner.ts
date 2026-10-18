@@ -2,15 +2,25 @@ import { readdir, realpath, stat } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
 import { join, extname, resolve } from 'node:path'
 import type { Photo, ScanResult } from '../shared/types'
+import { resolvePhotoDate } from '../shared/date'
 import { sortPhotos } from '../shared/photoStore'
 import { readImageMetadata } from './metadata'
 import type { MetadataCache } from './metadata-cache'
 
 /**
- * Only JPEG for now. HEIC needs an external decoder and RAW needs a huge
- * dependency; both are deliberately out of scope.
+ * Formats the wall accepts.
+ *
+ * PNG is included because it needs no extra decoder — `sharp` handles it
+ * natively and Chromium can display the original directly, so the whole
+ * pipeline works unchanged. It costs more than JPEG (a lossless 4000x3000 file
+ * is ~12x larger and decodes ~3x slower) but nothing structural.
+ *
+ * HEIC is still out of scope: the bundled libvips has no HEVC decoder
+ * (`heif: Support for this compression format has not been built in`), and
+ * neither Chromium nor the prebuilt `sharp` can read one. RAW needs a huge
+ * dependency. Both would be a change of architecture rather than of a list.
  */
-export const SUPPORTED_EXTENSIONS = new Set(['.jpg', '.jpeg'])
+export const SUPPORTED_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png'])
 
 export function isSupportedImage(name: string): boolean {
   return SUPPORTED_EXTENSIONS.has(extname(name).toLowerCase())
@@ -145,14 +155,18 @@ async function toPhoto(dir: string, name: string, cache?: MetadataCache): Promis
     // whether a cached row is still valid.
     const cached = cache?.lookup(path, info.mtimeMs, info.size)
     if (cached) {
+      // The cache stores only what the file itself said. The mtime fallback is
+      // applied here rather than cached, so changing the policy never leaves a
+      // stale derived date behind.
+      const date = resolvePhotoDate(cached.takenAt, info.mtimeMs)
       return {
         id: photoId(path),
         path,
         name,
         width: cached.width,
         height: cached.height,
-        takenAt: cached.takenAt,
-        dateSource: cached.takenAt ? 'exif' : 'none',
+        takenAt: date.takenAt,
+        dateSource: date.dateSource,
         mtimeMs: info.mtimeMs,
         sizeBytes: info.size
       }
@@ -160,14 +174,15 @@ async function toPhoto(dir: string, name: string, cache?: MetadataCache): Promis
 
     const meta = await readImageMetadata(path)
     cache?.store(path, info.mtimeMs, info.size, meta)
+    const date = resolvePhotoDate(meta.takenAt, info.mtimeMs)
     return {
       id: photoId(path),
       path,
       name,
       width: meta.width,
       height: meta.height,
-      takenAt: meta.takenAt,
-      dateSource: meta.takenAt ? 'exif' : 'none',
+      takenAt: date.takenAt,
+      dateSource: date.dateSource,
       mtimeMs: info.mtimeMs,
       sizeBytes: info.size
     }

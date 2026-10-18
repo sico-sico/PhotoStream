@@ -13,7 +13,7 @@ export interface PhotoStreamApi {
   appInfo: () => Promise<AppInfo>
   pickDirectory: (locale?: string) => Promise<string | null>
   /**
-   * Open a folder. `recursive` includes JPEGs in subfolders.
+   * Open a folder. `recursive` includes photos in subfolders.
    *
    * The renderer passes its stored preference on every open rather than the main
    * process remembering one, so switching the setting and re-opening the same

@@ -3,7 +3,7 @@ import type { Catalog } from '../messages'
 export const zhCN: Catalog = {
   'app.title': 'PhotoStream',
   'app.emptyTitle': 'PhotoStream',
-  'app.emptyBody': '选择一个存放 JPEG 照片的文件夹，或直接把文件夹拖到这个窗口，即可开始浏览。',
+  'app.emptyBody': '选择一个存放照片的文件夹，或直接把文件夹拖到这个窗口，即可开始浏览。',
   'app.emptyAction': '打开文件夹…',
   'app.dropHint': '拖入文件夹或照片以打开',
   'app.errorRetry': '换个文件夹试试',
@@ -53,6 +53,7 @@ export const zhCN: Catalog = {
 
   'tile.noDate': '无拍摄日期',
   'tile.unknownDate': '—',
+  'date.fromFile': '文件日期',
 
   'viewer.prev': '上一张',
   'viewer.next': '下一张',
@@ -98,12 +99,14 @@ export const zhCN: Catalog = {
   'exif.fileName': '文件名',
   'exif.dimensions': '尺寸',
   'exif.software': '软件',
+  'exif.dateSource': '日期来源',
+  'exif.dateFromFile': '文件修改时间',
 
   'dialog.chooseFolder': '选择照片文件夹',
 
   'about.title': '关于 PhotoStream',
   'about.version': '版本 {version}',
-  'about.description': '面向 JPEG 文件夹的照片墙。扫描、拖动、缩放、查看细节。',
+  'about.description': '面向照片文件夹的照片墙。扫描、拖动、缩放、查看细节。',
   'about.runtime': '运行环境',
   'about.electron': 'Electron {version}',
   'about.chromium': 'Chromium {version}',
