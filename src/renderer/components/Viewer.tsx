@@ -28,15 +28,17 @@ export interface ViewerProps {
   onNext: () => void
   onReveal: () => void
   /**
-   * Start with the EXIF panel expanded.
+   * Whether the EXIF panel is shown.
    *
-   * Set when the user opened this specific photo from outside the app — a drop,
-   * or Explorer's "Open with" — because in that case they pointed at *this file*
-   * and the file's details are as much of the answer as the picture is. Coming
-   * from the wall, clicking a tile is a request to look at the photo, and the
-   * panel would just be in the way.
+   * Owned by the wall so the choice can be remembered and persisted: the panel
+   * describes *how the user wants to browse*, so it has to survive stepping to
+   * the next photo, closing the viewer and restarting the app. Opening one file
+   * from outside the app turns it on, because in that case the file's details
+   * are as much of the answer as the picture.
    */
-  initialInfoOpen?: boolean
+  infoOpen?: boolean
+  /** Called when the user opens or closes the panel, so the choice can be kept. */
+  onInfoOpenChange?: (open: boolean) => void
 }
 
 /** Identity transform meaning "the photo exactly fits the stage". */
@@ -73,7 +75,8 @@ export function Viewer({
   onPrev,
   onNext,
   onReveal,
-  initialInfoOpen = false
+  infoOpen = false,
+  onInfoOpenChange
 }: ViewerProps): React.JSX.Element {
   const { t, locale } = useI18n()
   const [fullLoaded, setFullLoaded] = useState(false)
@@ -82,8 +85,6 @@ export function Viewer({
   const [dragging, setDragging] = useState(false)
   /** Non-null while two or more fingers are down. */
   const [pinching, setPinching] = useState(false)
-  /** Whether the EXIF detail panel is expanded. */
-  const [infoOpen, setInfoOpen] = useState(initialInfoOpen)
   /** `null` until the read finishes; `{}` when the file carries no EXIF. */
   const [exif, setExif] = useState<RawExif | null>(null)
 
@@ -157,16 +158,19 @@ export function Viewer({
   }, [photo.id])
 
   /**
-   * Adopt the caller's panel preference when it changes.
+   * Toggle the panel and report it, so the choice outlives this photo.
    *
-   * `useState(initialInfoOpen)` only reads its argument on mount, and the viewer
-   * is not remounted when it steps to another photo or when a new external open
-   * arrives. Without this, opening one file from Explorer and then a different
-   * one would leave the panel in whatever state the first launch left it.
+   * A plain `setInfoOpen` would keep the state local to the viewer, and the
+   * viewer is not remounted between photos — but the wall also needs to know, or
+   * the preference cannot be persisted and the panel closes again on the next
+   * photo or the next launch.
    */
-  useEffect(() => {
-    setInfoOpen(initialInfoOpen)
-  }, [initialInfoOpen, photo.id])
+  const toggleInfo = useCallback(
+    (next?: boolean) => {
+      onInfoOpenChange?.(next ?? !infoOpen)
+    },
+    [infoOpen, onInfoOpenChange]
+  )
 
   /** Everything the bounds depend on, in the stage's content box. */
   const geometryFor = useCallback(
@@ -289,14 +293,14 @@ export function Viewer({
       else if (event.key === '-' || event.key === '_') zoomByFactor(1 / 1.25)
       else if (event.key === 'r' || event.key === 'R' || event.key === ']') rotateBy(90)
       else if (event.key === '[') rotateBy(-90)
-      else if (event.key === 'i' || event.key === 'I') setInfoOpen((open) => !open)
+      else if (event.key === 'i' || event.key === 'I') toggleInfo()
       else return
       // Only swallow the keys the viewer actually handled.
       event.preventDefault()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, onNext, onPrev, reset, rotateBy, zoomByFactor])
+  }, [onClose, onNext, onPrev, reset, rotateBy, toggleInfo, zoomByFactor])
 
   // A non-passive listener is required: React's synthetic wheel handler cannot
   // `preventDefault`, and the wall behind the overlay would scroll instead.
@@ -491,7 +495,7 @@ export function Viewer({
           />
         </div>
 
-        {infoOpen ? <InfoPanel photo={photo} exif={exif} onClose={() => setInfoOpen(false)} /> : null}
+        {infoOpen ? <InfoPanel photo={photo} exif={exif} onClose={() => toggleInfo(false)} /> : null}
       </div>
 
       <div className="viewer-bar">
@@ -510,7 +514,7 @@ export function Viewer({
         <button
           type="button"
           className={`button ghost ${infoOpen ? 'active' : ''}`}
-          onClick={() => setInfoOpen((open) => !open)}
+          onClick={() => toggleInfo()}
           aria-label={infoOpen ? t('viewer.hideInfo') : t('viewer.info')}
           aria-expanded={infoOpen}
           title={`${infoOpen ? t('viewer.hideInfo') : t('viewer.info')} (I)`}

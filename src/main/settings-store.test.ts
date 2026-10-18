@@ -30,9 +30,16 @@ describe('sanitizeSettings', () => {
       filters: { from: '2020-01-01', to: '', text: 'x' },
       locale: 'fr',
       history: ['/photos'],
-      recursive: false
+      recursive: false,
+      viewerInfo: true
     }
     expect(sanitizeSettings(value)).toEqual(value)
+  })
+
+  it('defaults viewerInfo to off when the key is absent', () => {
+    // Settings files written before the preference existed must not turn the
+    // panel on for everyone who upgrades.
+    expect(sanitizeSettings({ lastDir: '/photos' }).viewerInfo).toBe(false)
   })
 
   it('defaults a missing history to an empty list', () => {
@@ -166,7 +173,8 @@ describe('saveSettings', () => {
       filters: { from: '2020-01-01', to: '2020-12-31', text: 'kyoto' },
       locale: 'fr',
       history: ['/photos', '/photos/trip'],
-      recursive: true
+      recursive: true,
+      viewerInfo: true
     }
     await saveSettings(dir, settings)
 

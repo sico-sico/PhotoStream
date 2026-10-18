@@ -820,6 +820,36 @@ test('picks up a new photo without reopening the folder', async () => {
   await expect(captions.nth(0)).toHaveText('2025-04-20')
 })
 
+test('keeps the EXIF panel open while stepping through photos', async () => {
+  await useEnglish()
+  await openLibrary()
+  // Reported: opening the details panel and then pressing an arrow key closed
+  // it, even though the panel had been opened deliberately. The choice is a
+  // browsing preference, so it has to survive both the photo change and a
+  // restart.
+  await openPhoto('Kyoto')
+
+  await page.keyboard.press('i')
+  await expect(page.getByTestId('info-panel')).toBeVisible()
+
+  await page.keyboard.press('ArrowRight')
+  await expect(page.getByTestId('info-panel')).toBeVisible()
+
+  // And it is remembered: restart with the panel open and it comes back open.
+  await page.waitForTimeout(500)
+  await app.close()
+  app = await electron.launch({
+    args: [join(__dirname, '..', '..', 'out', 'main', 'index.js')],
+    env: { ...process.env, PHOTOSTREAM_USER_DATA: userDataDir }
+  })
+  page = await app.firstWindow()
+  await page.waitForLoadState('domcontentloaded')
+
+  await openLibrary()
+  await openPhoto('Kyoto')
+  await expect(page.getByTestId('info-panel')).toBeVisible()
+})
+
 test('persists the chosen layout and language across a restart', async () => {
   await useEnglish()
   await page.getByRole('button', { name: 'Square' }).click()

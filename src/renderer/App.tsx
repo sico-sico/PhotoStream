@@ -380,8 +380,10 @@ function AppView({
           onPrev={() => wall.step(-1)}
           onNext={() => wall.step(1)}
           onReveal={() => void window.photoStream.revealInFolder(wall.openPhoto!.path)}
-          // Expanded only when this file was opened from outside the app.
-          initialInfoOpen={wall.state.viewerInfo}
+          // Remembered rather than per-photo: the panel is a preference about
+          // how to browse, so stepping to the next photo keeps it open.
+          infoOpen={wall.state.viewerInfo}
+          onInfoOpenChange={wall.setViewerInfo}
         />
       ) : null}
 

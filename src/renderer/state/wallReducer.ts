@@ -27,11 +27,13 @@ export interface WallState {
    */
   viewerOpen: boolean
   /**
-   * Whether the open viewer should start with the EXIF panel expanded.
+   * Whether the viewer shows the EXIF panel — a remembered preference.
    *
-   * True only when the user opened one specific file from outside the app (a
-   * drop, or Explorer's "Open with"), where the file's details are part of what
-   * they asked for. Reset whenever the viewer is opened another way.
+   * It persists across photos, across closing and reopening the viewer, and
+   * across restarts (it is written to the settings file). Toggling it is the
+   * user stating how they want to browse, not a comment on one photo, so it is
+   * not reset per photo. Opening a specific file from outside the app turns it
+   * on, since the file's details are part of what was asked for.
    */
   viewerInfo: boolean
   status: 'idle' | 'scanning' | 'ready' | 'error'
@@ -89,6 +91,7 @@ export type WallAction =
   | { type: 'selection/step'; delta: number; order: readonly string[] }
   | { type: 'viewer/open' }
   | { type: 'viewer/openWithInfo' }
+  | { type: 'viewer/info'; open: boolean }
   | { type: 'viewer/close' }
 
 export function reducer(state: WallState, action: WallAction): WallState {
@@ -168,17 +171,21 @@ export function reducer(state: WallState, action: WallAction): WallState {
       return { ...state, recursive: action.recursive }
 
     case 'selection/set':
-      // Focusing a photo also opens it: that is what clicking a tile means.
-      // `viewerInfo` is cleared: a click on the wall asks to *look* at a photo,
-      // not to inspect its file details.
-      return { ...state, selectedId: action.id, viewerOpen: action.id !== null, viewerInfo: false }
+      // Focusing a photo also opens it: that is what clicking a tile means. The
+      // panel keeps the remembered preference rather than closing, so a user who
+      // works with the details open does not lose them on every click.
+      return { ...state, selectedId: action.id, viewerOpen: action.id !== null }
 
     case 'viewer/open':
-      return state.selectedId ? { ...state, viewerOpen: true, viewerInfo: false } : state
+      return state.selectedId ? { ...state, viewerOpen: true } : state
 
     case 'viewer/openWithInfo':
-      // Only used when the user opened this exact file from outside the app.
+      // Used when the user opened this exact file from outside the app. It turns
+      // the panel *on* and remembers that, but never turns it off.
       return state.selectedId ? { ...state, viewerOpen: true, viewerInfo: true } : state
+
+    case 'viewer/info':
+      return { ...state, viewerInfo: action.open }
 
     case 'viewer/close':
       // The photo stays focused so the arrow keys keep working on the wall.
@@ -195,10 +202,10 @@ export function reducer(state: WallState, action: WallAction): WallState {
       // With nothing selected, the first step opens the first photo.
       const next = current === -1 ? (delta > 0 ? 0 : order.length - 1) : current + delta
       const clamped = Math.min(Math.max(next, 0), order.length - 1)
-      // Stepping moves to a different photo, whose details the user did not ask
-      // for: keep whatever the panel state is, but drop the "opened externally"
-      // intent so it does not re-open on every subsequent photo.
-      return { ...state, selectedId: order[clamped], viewerOpen: true, viewerInfo: false }
+      // Stepping moves to a different photo, so the panel state carries over:
+      // clearing it here is what made the panel close as soon as the user
+      // pressed an arrow key, even though they had opened it deliberately.
+      return { ...state, selectedId: order[clamped], viewerOpen: true }
     }
 
     default:

@@ -68,6 +68,8 @@ export interface UseWall {
   prefetchForScroll: (targetY: number) => void
   /** Open a folder straight from the recent-folders list. */
   openHistoryEntry: (dir: string) => Promise<void>
+  /** Remember whether the viewer's EXIF panel is shown. */
+  setViewerInfo: (open: boolean) => void
   /** Forget one recent folder. */
   removeHistoryEntry: (dir: string) => void
   /** Forget every recent folder. */
@@ -265,6 +267,9 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
       dispatch({ type: 'history/set', history: settings.history ?? [] })
       recursiveRef.current = settings.recursive === true
       dispatch({ type: 'recursive/set', recursive: recursiveRef.current })
+      // Restore how the user last wanted the EXIF panel. Absent in files written
+      // before this preference existed, which `== true` treats as off.
+      dispatch({ type: 'viewer/info', open: settings.viewerInfo === true })
       // Only reopen the remembered folder if the user has not opened one
       // themselves already. `loadSettings` is async, so a folder dragged in
       // right after launch arrives before this point — and reopening `lastDir`
@@ -305,10 +310,21 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
       filters: state.filters,
       locale: state.locale,
       history: state.history,
-      recursive: state.recursive
+      recursive: state.recursive,
+      viewerInfo: state.viewerInfo
     }
     void window.photoStream.saveSettings(settings)
-  }, [restored, state.dir, state.layout, state.sort, state.filters, state.locale, state.history, state.recursive])
+  }, [
+    restored,
+    state.dir,
+    state.layout,
+    state.sort,
+    state.filters,
+    state.locale,
+    state.history,
+    state.recursive,
+    state.viewerInfo
+  ])
 
   // Subscribe to watcher deltas and thumbnail progress.
   useEffect(() => {
@@ -382,6 +398,15 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
 
   /** Open a folder straight from the history list. */
   const openHistoryEntry = useCallback((dir: string) => openDirectory(dir), [openDirectory])
+
+  /**
+   * Remember whether the EXIF panel is shown.
+   *
+   * Persisted with the other preferences: the choice describes how the user
+   * wants to browse, so it has to survive stepping to the next photo, closing
+   * the viewer and restarting the app.
+   */
+  const setViewerInfo = useCallback((open: boolean) => dispatch({ type: 'viewer/info', open }), [])
 
   /** Forget one folder. Does not touch the library that is currently open. */
   const removeHistoryEntry = useCallback((dir: string) => dispatch({ type: 'history/remove', dir }), [])
@@ -668,6 +693,7 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
     openHistoryEntry,
     removeHistoryEntry,
     clearHistory,
+    setViewerInfo,
     setFilters: (filters) => dispatch({ type: 'filters/set', filters }),
     resetFilters: () => dispatch({ type: 'filters/reset' }),
     setLayout: (layout) => dispatch({ type: 'layout/set', layout }),

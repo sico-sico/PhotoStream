@@ -88,6 +88,15 @@ export interface Settings {
    * Users who organise by year (`Pictures/2024/...`) can turn it on.
    */
   recursive: boolean
+  /**
+   * Whether the EXIF panel is shown in the single-photo viewer.
+   *
+   * A remembered choice rather than a per-photo one: someone who wants the
+   * details wants them for every photo they step through, and having to press
+   * `I` again after each arrow key is the behaviour that makes the panel feel
+   * broken. Persisted so it also survives a restart.
+   */
+  viewerInfo: boolean
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -97,7 +106,8 @@ export const DEFAULT_SETTINGS: Settings = {
   filters: EMPTY_FILTERS,
   locale: '',
   history: [],
-  recursive: false
+  recursive: false,
+  viewerInfo: false
 }
 
 /**

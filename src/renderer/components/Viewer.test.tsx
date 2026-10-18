@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import React from 'react'
 import { render, screen, act, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { Photo } from '@shared/types'
@@ -34,9 +35,22 @@ beforeEach(() => {
   })
 })
 
-function renderViewer(props: Partial<React.ComponentProps<typeof Viewer>> = {}, locale = 'en'): ReturnType<typeof render> {
-  return render(
-    <I18nProvider preference={locale} systemLocales={[]} onLocaleChange={() => {}}>
+/**
+ * Render the viewer with the panel state it now expects from its owner.
+ *
+ * `infoOpen` is controlled rather than internal, because the choice has to be
+ * remembered across photos and persisted; a test that passed a fixed prop would
+ * never see the panel toggle. This wrapper is the smallest owner that behaves
+ * like the wall does.
+ */
+function renderViewer(
+  props: Partial<React.ComponentProps<typeof Viewer>> = {},
+  locale = 'en'
+): ReturnType<typeof render> & { infoChanges: boolean[] } {
+  const infoChanges: boolean[] = []
+  function Harness(): React.JSX.Element {
+    const [open, setOpen] = React.useState(props.infoOpen ?? false)
+    return (
       <Viewer
         photo={photo}
         previewUrl="pic://thumb/hash-wall.webp"
@@ -45,9 +59,21 @@ function renderViewer(props: Partial<React.ComponentProps<typeof Viewer>> = {}, 
         onNext={() => {}}
         onReveal={() => {}}
         {...props}
+        infoOpen={open}
+        onInfoOpenChange={(next) => {
+          infoChanges.push(next)
+          setOpen(next)
+          props.onInfoOpenChange?.(next)
+        }}
       />
+    )
+  }
+  const result = render(
+    <I18nProvider preference={locale} systemLocales={[]} onLocaleChange={() => {}}>
+      <Harness />
     </I18nProvider>
   )
+  return { ...result, infoChanges }
 }
 
 describe('Viewer', () => {
@@ -520,6 +546,10 @@ describe('Viewer', () => {
             onPrev={() => {}}
             onNext={() => {}}
             onReveal={() => {}}
+            // The panel state now comes from the owner, and it stays open: that
+            // is the whole point of remembering the choice.
+            infoOpen
+            onInfoOpenChange={() => {}}
           />
         </I18nProvider>
       )
@@ -539,36 +569,43 @@ describe('Viewer', () => {
       expect(toggle).toHaveAttribute('aria-expanded', 'true')
     })
 
-    it('starts expanded when the photo was opened from outside the app', async () => {
-      // Dropping a picture, or Explorer's "Open with", points at one specific
-      // file: its details are part of what was asked for, so the panel opens
-      // with it instead of waiting for a click and a second round trip.
-      renderViewer({ initialInfoOpen: true })
+    it('starts expanded when the preference says so', async () => {
+      // Dropping a picture, or Explorer's "Open with", turns the preference on:
+      // its details are part of what was asked for.
+      renderViewer({ infoOpen: true })
 
       expect(await screen.findByTestId('info-panel')).toBeInTheDocument()
       expect(photoExif).toHaveBeenCalledWith('/photos/kyoto.jpg')
     })
 
-    it('starts collapsed when the photo came from the wall', async () => {
-      // Clicking a tile is a request to look at the picture; the panel would
-      // cover it.
-      renderViewer({ initialInfoOpen: false })
+    it('starts collapsed when the preference is off', async () => {
+      renderViewer({ infoOpen: false })
       expect(screen.queryByTestId('info-panel')).toBeNull()
       expect(photoExif).not.toHaveBeenCalled()
     })
 
-    it('adopts a later external open without a remount', async () => {
-      // `useState(initialInfoOpen)` only reads on mount, and stepping to another
-      // photo does not remount. Opening a second file from Explorer must still
-      // expand the panel for it.
+    it('reports every toggle so the choice can be remembered', async () => {
+      // The state lives with the wall, not here: without this callback the
+      // preference could not be persisted and the panel would close again on the
+      // next photo.
       const user = userEvent.setup()
-      const { rerender } = renderViewer({ initialInfoOpen: false })
-      expect(screen.queryByTestId('info-panel')).toBeNull()
+      const { infoChanges } = renderViewer()
 
       await user.keyboard('i')
       await screen.findByTestId('info-panel')
       await user.keyboard('i')
       expect(screen.queryByTestId('info-panel')).toBeNull()
+
+      expect(infoChanges).toEqual([true, false])
+    })
+
+    it('keeps the panel open across a photo change', async () => {
+      // The reported bug: stepping to the next photo closed the panel, even
+      // though the user had deliberately opened it.
+      const user = userEvent.setup()
+      const { rerender } = renderViewer()
+      await user.keyboard('i')
+      await screen.findByTestId('info-panel')
 
       rerender(
         <I18nProvider preference="en" systemLocales={[]} onLocaleChange={() => {}}>
@@ -579,7 +616,8 @@ describe('Viewer', () => {
             onPrev={() => {}}
             onNext={() => {}}
             onReveal={() => {}}
-            initialInfoOpen
+            infoOpen
+            onInfoOpenChange={() => {}}
           />
         </I18nProvider>
       )

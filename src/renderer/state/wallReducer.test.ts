@@ -222,18 +222,31 @@ describe('wallReducer', () => {  describe('scanning', () => {
       expect(clicked.viewerInfo).toBe(false)
     })
 
-    it('drops the external-open flag when stepping to another photo', () => {
-      // The flag describes one file, not the viewer: keeping it would open the
-      // panel on every subsequent photo.
-      const external: WallState = { ...INITIAL_STATE, selectedId: 'b', viewerOpen: true, viewerInfo: true }
-      const stepped = reducer(external, { type: 'selection/step', delta: 1, order: ['a', 'b', 'c'] })
+    it('keeps the panel choice when stepping to another photo', () => {
+      // The reported bug: opening the panel and then pressing an arrow key closed
+      // it, even though the user had deliberately opened it. The choice is a
+      // preference about how to browse, not a fact about one photo.
+      const open: WallState = { ...INITIAL_STATE, selectedId: 'b', viewerOpen: true, viewerInfo: true }
+      const stepped = reducer(open, { type: 'selection/step', delta: 1, order: ['a', 'b', 'c'] })
       expect(stepped.selectedId).toBe('c')
+      expect(stepped.viewerInfo).toBe(true)
+    })
+
+    it('keeps the panel closed when stepping with it closed', () => {
+      const closed: WallState = { ...INITIAL_STATE, selectedId: 'b', viewerOpen: true, viewerInfo: false }
+      const stepped = reducer(closed, { type: 'selection/step', delta: 1, order: ['a', 'b', 'c'] })
       expect(stepped.viewerInfo).toBe(false)
     })
 
-    it('clears the external-open flag when the viewer is reopened by a click', () => {
-      const external: WallState = { ...INITIAL_STATE, selectedId: 'b', viewerOpen: false, viewerInfo: true }
-      expect(reducer(external, { type: 'viewer/open' }).viewerInfo).toBe(false)
+    it('keeps the panel choice when the viewer is reopened by a click', () => {
+      const open: WallState = { ...INITIAL_STATE, selectedId: 'b', viewerOpen: false, viewerInfo: true }
+      expect(reducer(open, { type: 'viewer/open' }).viewerInfo).toBe(true)
+    })
+
+    it('remembers the panel being toggled', () => {
+      const opened = reducer(INITIAL_STATE, { type: 'viewer/info', open: true })
+      expect(opened.viewerInfo).toBe(true)
+      expect(reducer(opened, { type: 'viewer/info', open: false }).viewerInfo).toBe(false)
     })
 
     it('moves the focus without opening the viewer', () => {

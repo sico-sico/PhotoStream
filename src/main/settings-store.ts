@@ -46,7 +46,8 @@ export function sanitizeSettings(raw: unknown): Settings {
     history: sanitizeHistory(source.history),
     // Anything other than an explicit `true` means off: a missing key in an
     // older file must default to the documented behaviour, not to `undefined`.
-    recursive: source.recursive === true
+    recursive: source.recursive === true,
+    viewerInfo: source.viewerInfo === true
   }
 }
 

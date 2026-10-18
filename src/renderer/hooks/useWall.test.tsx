@@ -759,6 +759,29 @@ describe('useWall', () => {
   })
 
   describe('persistence', () => {
+    it('restores the remembered EXIF panel choice', async () => {
+      // The preference is a browsing style, so it has to survive a restart. It
+      // was never written before, which is why the panel always came back
+      // closed on the next launch.
+      installApi({ viewerInfo: true })
+      const { result } = renderHook(() => useWall(viewport))
+      await waitFor(() => expect(result.current.state.viewerInfo).toBe(true))
+    })
+
+    it('saves the EXIF panel choice', async () => {
+      const { result } = renderHook(() => useWall(viewport))
+      await waitFor(() => expect(api.loadSettings).toHaveBeenCalled())
+
+      act(() => {
+        result.current.setViewerInfo(true)
+      })
+
+      await waitFor(() => {
+        const saved = api.saveSettings.mock.calls.at(-1)?.[0] as Settings | undefined
+        expect(saved?.viewerInfo).toBe(true)
+      })
+    })
+
     it('saves layout changes', async () => {
       const { result } = renderHook(() => useWall(viewport))
       await waitFor(() => expect(api.loadSettings).toHaveBeenCalled())
