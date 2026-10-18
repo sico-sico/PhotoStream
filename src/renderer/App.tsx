@@ -470,7 +470,7 @@ function AppView({
       {showOpen ? (
         <RandomShow
           pool={wall.visiblePhotos}
-          thumbUrls={wall.thumbUrls}
+          urlMapsByLevel={wall.urlMapsByLevel}
           onShow={wall.ensureThumbs}
           onClose={() => setShowOpen(false)}
         />

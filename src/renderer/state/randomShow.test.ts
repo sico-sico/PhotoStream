@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest'
+﻿import { describe, expect, it } from 'vitest'
 import type { Photo } from '@shared/types'
 import {
   CENTRE_FRACTION,
   INITIAL_SHOW_STATE,
   advance,
+  centreThumbLevel,
   focusPhoto,
   isPaused,
   showReducer,
@@ -203,6 +204,32 @@ describe('focusPhoto', () => {
     const state = started()
     const next = focusPhoto(state, state.surrounding[0].id, 5000)
     expect(next.lastPromotionAt).toBe(5000)
+  })
+})
+
+describe('centreThumbLevel', () => {
+  it('serves the zoom tier on an ordinary 1x display', () => {
+    // 956 * 0.68 is well under the 2560px zoom tier.
+    expect(centreThumbLevel({ width: 1600, height: 956 }, 1)).toBe('zoom')
+  })
+
+  it('asks for the original once a high-DPI window needs more than 2560px', () => {
+    // The point of the whole mechanism: a 4K-class window at 2x renders the
+    // centre photo at ~2940 CSS px, which the 2560px tier cannot fill.
+    expect(centreThumbLevel({ width: 3840, height: 2160 }, 2)).toBe('full')
+    expect(centreThumbLevel({ width: 5120, height: 2880 }, 2)).toBe('full')
+  })
+
+  it('is driven by the shorter side, since a contained photo cannot exceed it', () => {
+    // A tall narrow window constrains by width; a wide one by height.
+    expect(centreThumbLevel({ width: 900, height: 4000 }, 1)).toBe('zoom')
+    expect(centreThumbLevel({ width: 4000, height: 900 }, 1)).toBe('zoom')
+  })
+
+  it('falls back to zoom before the window has been measured', () => {
+    // A zero-size viewport must not produce `full`: that would decode originals
+    // for a window that is not on screen yet.
+    expect(centreThumbLevel({ width: 0, height: 0 }, 1)).toBe('zoom')
   })
 })
 

@@ -1,15 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Photo } from '@shared/types'
+import type { Photo, ThumbLevel } from '@shared/types'
 import { useI18n } from '../i18n/context'
-import { INITIAL_SHOW_STATE, advance, focusPhoto, isPaused, shownPhotos, showReducer } from '../state/randomShow'
+import { INITIAL_SHOW_STATE, advance, centreThumbLevel, focusPhoto, isPaused, shownPhotos, showReducer } from '../state/randomShow'
 
 export interface RandomShowProps {
   /** Photos the show may draw from — the caller passes the filtered set. */
   pool: readonly Photo[]
-  /** Thumbnail URLs by photo id, as the wall already has them. */
-  thumbUrls: Record<string, string>
+  /**
+   * URLs at every tier, so the centre photo can be served at the resolution its
+   * displayed size demands.
+   *
+   * The centre covers about two thirds of the window, and whether that needs the
+   * 2560px `zoom` tier or the original depends on the display: measured, every 1x
+   * window is fine with `zoom`, while 2160px at 2x wants `full`. A fixed tier
+   * would be soft on exactly the screens where the show looks best.
+   *
+   * The ring stays on the wall tier: it is small on screen, and using a sharper
+   * tier there would multiply memory for no visible gain.
+   */
+  urlMapsByLevel: Record<ThumbLevel, Record<string, string>>
   /** Called when the on-screen set changes, so the caller can request thumbnails. */
-  onShow: (photos: readonly Photo[]) => void
+  onShow: (photos: readonly Photo[], level: ThumbLevel) => void
   onClose: () => void
 }
 
@@ -35,7 +46,12 @@ const TICK_MS = 250
  * through the exported pure functions, so the reducer's "return the same object
  * when nothing is due" contract turns into an automatic skipped render.
  */
-export function RandomShow({ pool, thumbUrls, onShow, onClose }: RandomShowProps): React.JSX.Element {
+export function RandomShow({
+  pool,
+  urlMapsByLevel,
+  onShow,
+  onClose
+}: RandomShowProps): React.JSX.Element {
   const { t } = useI18n()
   const [state, setState] = useState(INITIAL_SHOW_STATE)
   const [viewport, setViewport] = useState({ width: 0, height: 0 })
@@ -108,6 +124,27 @@ export function RandomShow({ pool, thumbUrls, onShow, onClose }: RandomShowProps
 
   const shown = useMemo(() => shownPhotos(state), [state])
 
+  /**
+   * The tier the centre photo needs on this display.
+   *
+   * Recomputed on resize and DPR change rather than fixed, because the answer
+   * genuinely differs: `zoom` is enough at 1x, and a large high-DPI window wants
+   * the original.
+   */
+  const [centreLevel, setCentreLevel] = useState<ThumbLevel>('zoom')
+  useEffect(() => {
+    const dpr = (): number => window.devicePixelRatio || 1
+    const update = (): void => setCentreLevel(centreThumbLevel(viewport, dpr()))
+    update()
+    // A window dragged between monitors changes DPR without resizing, so the
+    // level has to follow that too. `matchMedia` is absent in jsdom and in some
+    // embedded contexts; the resize path still covers the common case.
+    if (typeof window.matchMedia !== 'function') return
+    const query = window.matchMedia(`(resolution: ${dpr()}dppx)`)
+    query.addEventListener?.('change', update)
+    return () => query.removeEventListener?.('change', update)
+  }, [viewport])
+
   // Ask for the thumbnails of whatever is on screen. Keyed on the ids alone:
   // the array identity changes on every render, which would re-request forever.
   const shownKey = shown
@@ -116,8 +153,17 @@ export function RandomShow({ pool, thumbUrls, onShow, onClose }: RandomShowProps
   const shownRef = useRef(shown)
   shownRef.current = shown
   useEffect(() => {
-    if (shownRef.current.length > 0) onShow(shownRef.current)
-  }, [shownKey, onShow])
+    const photos = shownRef.current
+    if (photos.length === 0) return
+    // Two requests, not one per photo: the centre needs whatever its displayed
+    // size demands, and the ring is small enough that the wall tier is ample.
+    // Asking for the sharp tier for everything would decode dozens of 2560px (or
+    // original) images, which is exactly the memory problem tiering exists to
+    // avoid.
+    const [centre, ...ring] = photos
+    onShow([centre], centreLevel)
+    if (ring.length > 0) onShow(ring, 'wall')
+  }, [shownKey, centreLevel, onShow])
 
   const promote = useCallback((id: string) => {
     setState((previous) => focusPhoto(previous, id, Date.now()))
@@ -170,11 +216,11 @@ export function RandomShow({ pool, thumbUrls, onShow, onClose }: RandomShowProps
             `left`/`top` would fight the transition that moves it on promotion.
           */}
           <div className="random-show-float random-show-float--centre">
-            {thumbUrls[state.centre.id] ? (
+            {urlMapsByLevel[centreLevel][state.centre.id] ? (
               <img
                 key={state.centre.id}
                 className="random-show-photo"
-                src={thumbUrls[state.centre.id]}
+                src={urlMapsByLevel[centreLevel][state.centre.id]}
                 alt={state.centre.name}
                 draggable={false}
               />
@@ -237,8 +283,8 @@ export function RandomShow({ pool, thumbUrls, onShow, onClose }: RandomShowProps
             onClick={() => promote(photo.id)}
             title={photo.name}
           >
-            {thumbUrls[photo.id] ? (
-              <img src={thumbUrls[photo.id]} alt={photo.name} draggable={false} />
+            {urlMapsByLevel.wall[photo.id] ? (
+              <img src={urlMapsByLevel.wall[photo.id]} alt={photo.name} draggable={false} />
             ) : (
               <span className="random-show-placeholder" aria-hidden="true" />
             )}

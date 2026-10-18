@@ -1,5 +1,6 @@
 import { centreBoxFor, mulberry32, pickRandom, scatterAround, type Box, type ScatterBox } from '@shared/random'
-import type { Photo } from '@shared/types'
+import { pickThumbLevel } from '@shared/thumbs'
+import type { Photo, ThumbLevel } from '@shared/types'
 
 /**
  * The random show's state.
@@ -93,6 +94,29 @@ const aspectOf = (photo: Photo): number =>
   Number.isFinite(photo.width) && Number.isFinite(photo.height) && photo.height > 0
     ? photo.width / photo.height
     : 1
+
+/**
+ * Which rendition the centre photo needs for a given window.
+ *
+ * The centre photo is drawn at `CENTRE_FRACTION` of the window's shorter side, so
+ * the pixels actually demanded are known before the image loads — and on a large
+ * or high-DPI display that demand exceeds the 2560px `zoom` tier. Measured:
+ * 2160px @2x and 2880px @2x both need `full`, while every 1x display is served by
+ * `zoom`.
+ *
+ * A fixed `zoom` would therefore look soft on exactly the displays where the show
+ * is most impressive. `pickThumbLevel` already answers this question for the wall,
+ * so it is reused rather than reimplemented.
+ *
+ * @param dpr device pixel ratio; a 2x screen needs twice the pixels of a 1x one
+ */
+export function centreThumbLevel(viewport: { width: number; height: number }, dpr = 1): ThumbLevel {
+  const shorter = Math.min(viewport.width, viewport.height)
+  if (!(shorter > 0)) return 'zoom'
+  // The long edge of a contained photo cannot exceed the shorter side of the
+  // window; that is the worst case and the one worth sizing for.
+  return pickThumbLevel(shorter * CENTRE_FRACTION, 1, dpr)
+}
 
 /** Nothing advances while the user is inspecting a small photo. */
 export function isPaused(state: ShowState): boolean {

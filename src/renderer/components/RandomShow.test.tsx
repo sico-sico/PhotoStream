@@ -49,15 +49,18 @@ function stubSize(width = 1600, height = 956): void {
   })
 }
 
-/** URLs for every photo, so the tiles render images rather than placeholders. */
-const thumbUrls = Object.fromEntries(POOL.map((p) => [p.id, `pic://thumb/${p.id}-wall.webp`]))
+/** URLs at every tier, so the centre can be served at whatever its size demands. */
+const wallUrls = Object.fromEntries(POOL.map((p) => [p.id, `pic://thumb/${p.id}-wall.webp`]))
+const zoomUrls = Object.fromEntries(POOL.map((p) => [p.id, `pic://thumb/${p.id}-zoom.webp`]))
+const fullUrls = Object.fromEntries(POOL.map((p) => [p.id, `pic://photo/${p.id}.jpg`]))
+const urlMapsByLevel = { wall: wallUrls, zoom: zoomUrls, full: fullUrls }
 
 function renderShow(props: Partial<React.ComponentProps<typeof RandomShow>> = {}) {
   return render(
     <I18nProvider preference="en" systemLocales={[]} onLocaleChange={() => {}}>
       <RandomShow
         pool={POOL}
-        thumbUrls={thumbUrls}
+        urlMapsByLevel={urlMapsByLevel}
         onShow={() => {}}
         onClose={() => {}}
         {...props}

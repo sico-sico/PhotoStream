@@ -63,6 +63,8 @@ export interface UseWall {
   mounted: CullResult
   thumbLevel: ThumbLevel
   thumbUrls: Record<string, string>
+  /** URLs at each tier, for callers that display a photo at a different size. */
+  urlMapsByLevel: Record<ThumbLevel, Record<string, string>>
   transform: Transform
   /** Accepts a value or an updater, exactly like `useState`'s setter. */
   setTransform: React.Dispatch<React.SetStateAction<Transform>>
@@ -86,8 +88,10 @@ export interface UseWall {
    * The random show draws photos from anywhere in the folder, so the viewport
    * driven request loop cannot know about them. Requests are deduped by the same
    * `requested` set the wall uses, so asking for a photo twice is cheap.
+   *
+   * @param level rendition to ask for; defaults to the wall's current one
    */
-  ensureThumbs: (photos: readonly Photo[]) => void
+  ensureThumbs: (photos: readonly Photo[], level?: ThumbLevel) => void
   /** Open a folder straight from the recent-folders list. */
   openHistoryEntry: (dir: string) => Promise<void>
   /** Remember whether the viewer's EXIF panel is shown. */
@@ -615,6 +619,35 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
   }, [visiblePhotos, thumbLevel, renditionTick])
 
   /**
+   * URLs at a named tier, with the usual sharper-then-blank fallback.
+   *
+   * The random show puts one photo across two thirds of the window, and how many
+   * pixels that needs depends on the display: every 1x window is served by the
+   * 2560px `zoom` tier, while a 2160px window at 2x wants the original. A fixed
+   * tier would be soft on exactly the displays where the show looks best, so the
+   * caller names the tier it decided on (see `centreThumbLevel`).
+   *
+   * Separate from `thumbUrls` rather than merged into it: the wall must keep using
+   * whatever its own zoom calls for, and handing every tile a sharper bitmap would
+   * reintroduce the memory problem tiering exists to solve.
+   */
+  const urlMapsByLevel = useMemo(() => {
+    const maps: Record<ThumbLevel, Record<string, string>> = { wall: {}, zoom: {}, full: {} }
+    for (const photo of visiblePhotos) {
+      const byLevel = renditionUrls.current.get(photo.id)
+      if (!byLevel) continue
+      // Each tier falls back towards *sharper* first, then coarser: an
+      // over-sharp photo is a far smaller surprise than a blank box.
+      if (byLevel.wall) maps.wall[photo.id] = byLevel.wall
+      const zoom = byLevel.zoom ?? byLevel.full
+      if (zoom) maps.zoom[photo.id] = zoom
+      const full = byLevel.full ?? byLevel.zoom ?? byLevel.wall
+      if (full) maps.full[photo.id] = full
+    }
+    return maps
+  }, [visiblePhotos, renditionTick])
+
+  /**
    * Ask for whatever is on screen that has not been requested yet.
    *
    * Normally `interactive`: these are the tiles the user is looking at, and the
@@ -726,12 +759,12 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
 
   /** Ask for thumbnails the wall's own viewport loop would not cover. */
   const ensureThumbs = useCallback(
-    (photos: readonly Photo[]) => {
-      const pending = photos.filter((photo) => !requested.current.has(`${photo.id}:${thumbLevel}`))
+    (photos: readonly Photo[], level: ThumbLevel = thumbLevel) => {
+      const pending = photos.filter((photo) => !requested.current.has(`${photo.id}:${level}`))
       if (pending.length === 0) return
-      for (const photo of pending) requested.current.add(`${photo.id}:${thumbLevel}`)
-      void window.photoStream.requestThumbs(pending, thumbLevel, 'interactive').catch(() => {
-        for (const photo of pending) requested.current.delete(`${photo.id}:${thumbLevel}`)
+      for (const photo of pending) requested.current.add(`${photo.id}:${level}`)
+      void window.photoStream.requestThumbs(pending, level, 'interactive').catch(() => {
+        for (const photo of pending) requested.current.delete(`${photo.id}:${level}`)
       })
     },
     [thumbLevel]
@@ -780,6 +813,7 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
     mounted,
     thumbLevel,
     thumbUrls,
+    urlMapsByLevel,
     transform,
     setTransform: clampedSetTransform,
     progress,
