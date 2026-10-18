@@ -57,26 +57,41 @@ export function Scrollbar({
   const metrics = scrollMetrics(transform, worldHeight, viewportHeight)
 
   /**
+   * Distance from the pointer to the thumb's top edge, held for the whole drag.
+   *
+   * Keeping it constant is what makes the thumb stay put under the cursor: the
+   * pointer moves by `d`, the thumb moves by `d`, and the relationship between
+   * them never changes. Two bugs came from getting this wrong:
+   *
+   * - clicking the track used half the *thumb height* as the offset, which is a
+   *   different quantity entirely, so the wall jumped down (or up) on click;
+   * - dragging passed `0`, i.e. assumed the pointer was always on the thumb's top
+   *   edge, so grabbing anywhere else snapped the thumb to the cursor first and
+   *   the wall appeared frozen until the pointer had travelled back that far.
+   */
+  const grabOffsetRef = useRef(0)
+
+  /**
    * Translate a pointer position on the track into a scroll.
    *
-   * `grabOffset` is the distance from the pointer to the thumb's top edge at the
-   * moment the drag began. Keeping it means the thumb does not jump to centre
-   * itself under the cursor.
+   * @param clientY pointer position, in viewport coordinates
    */
   const scrollToPointer = useCallback(
-    (clientY: number, grabOffset: number) => {
+    (clientY: number) => {
       const track = trackRef.current
       if (!track) return
       const rect = track.getBoundingClientRect()
       if (!(rect.height > 0)) return
 
-      const thumbHeight = rect.height * metrics.size
-      const travel = rect.height - thumbHeight
-      if (!(travel > 0)) return
-
-      const top = clientY - rect.top - grabOffset
-      const offset = Math.min(Math.max(top / travel, 0), 1)
-      const y = scrollOffsetToY(offset, worldHeight, viewportHeight, transform.scale)
+      const top = clientY - rect.top - grabOffsetRef.current
+      // Position of the thumb's top as a fraction of the whole track. The top
+      // edge ranges over 0 .. (1 - size), so clamping to that range is what stops
+      // a drag past either end. `scrollOffsetToY` takes this fraction and divides
+      // by `1 - size` itself; passing progress along the travel instead divided
+      // twice and overshot by `1 / (1 - size)`.
+      const maxTopFraction = 1 - metrics.size
+      const trackFraction = Math.min(Math.max(top / rect.height, 0), maxTopFraction)
+      const y = scrollOffsetToY(trackFraction, worldHeight, viewportHeight, transform.scale)
       // Announce the destination *before* scrolling, so the wall can start
       // fetching those tiles while the transition is still running.
       onScrollTarget(-y / (transform.scale > 0 ? transform.scale : 1))
@@ -95,18 +110,28 @@ export function Scrollbar({
     event.currentTarget.setPointerCapture?.(event.pointerId)
     setDragging(true)
 
-    // Clicking the track outside the thumb jumps there, which is what every
-    // scrollbar does; clicking on the thumb drags it without jumping.
     const rect = track.getBoundingClientRect()
     const thumbTop = rect.top + rect.height * metrics.offset
     const thumbBottom = thumbTop + rect.height * metrics.size
     const insideThumb = event.clientY >= thumbTop && event.clientY <= thumbBottom
-    scrollToPointer(event.clientY, insideThumb ? event.clientY - thumbTop : rect.height * metrics.size / 2)
+
+    if (insideThumb) {
+      // Grabbing the thumb: keep the exact point the user took hold of.
+      grabOffsetRef.current = event.clientY - thumbTop
+    } else {
+      // Clicking the track: centre the thumb on the pointer, so the click
+      // lands where the user aimed instead of offsetting by a fraction of it.
+      grabOffsetRef.current = (rect.height * metrics.size) / 2
+    }
+
+    scrollToPointer(event.clientY)
   }
 
   const onPointerMove = (event: React.PointerEvent<HTMLDivElement>): void => {
     if (!dragging) return
-    scrollToPointer(event.clientY, 0)
+    // Same offset as on pointerdown: the thumb travels with the pointer rather
+    // than snapping to it.
+    scrollToPointer(event.clientY)
   }
 
   const endDrag = (event: React.PointerEvent<HTMLDivElement>): void => {
