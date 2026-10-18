@@ -137,4 +137,83 @@ describe('MetadataCache', () => {
     cache.store('/photos/big.jpg', 1, huge, sample)
     expect(cache.lookup('/photos/big.jpg', 1, huge)).toEqual(sample)
   })
+
+  describe('full EXIF', () => {
+    const exif = { make: 'SONY', model: 'ILCE-7M5', fNumber: 1.8, iso: 100 }
+
+    it('misses until the panel has read the file', () => {
+      // A scan stores the date but not the full EXIF; "not read yet" must be
+      // distinguishable from "this photo has none", or the panel would render
+      // an empty result instead of parsing.
+      cache = new MetadataCache(file())
+      cache.store('/photos/a.jpg', 1000, 5000, sample)
+      expect(cache.lookup('/photos/a.jpg', 1000, 5000)).toEqual(sample)
+      expect(cache.lookupExif('/photos/a.jpg', 1000, 5000)).toBeUndefined()
+    })
+
+    it('round-trips the full EXIF', () => {
+      cache = new MetadataCache(file())
+      cache.store('/photos/a.jpg', 1000, 5000, sample)
+      cache.storeExif('/photos/a.jpg', 1000, 5000, exif)
+      expect(cache.lookupExif('/photos/a.jpg', 1000, 5000)).toEqual(exif)
+    })
+
+    it('keeps the scan fields intact when storing full EXIF', () => {
+      // The two writes share a row, so a bad update would silently break the
+      // wall's date ordering.
+      cache = new MetadataCache(file())
+      cache.store('/photos/a.jpg', 1000, 5000, sample)
+      cache.storeExif('/photos/a.jpg', 1000, 5000, exif)
+      expect(cache.lookup('/photos/a.jpg', 1000, 5000)).toEqual(sample)
+    })
+
+    it('survives a restart', () => {
+      cache = new MetadataCache(file())
+      cache.store('/photos/a.jpg', 1000, 5000, sample)
+      cache.storeExif('/photos/a.jpg', 1000, 5000, exif)
+      cache.close()
+
+      cache = new MetadataCache(file())
+      expect(cache.lookupExif('/photos/a.jpg', 1000, 5000)).toEqual(exif)
+    })
+
+    it('rejects the full EXIF once the file changes', () => {
+      cache = new MetadataCache(file())
+      cache.store('/photos/a.jpg', 1000, 5000, sample)
+      cache.storeExif('/photos/a.jpg', 1000, 5000, exif)
+      // A re-export shifts both mtime and size, so the stored settings describe
+      // a file that no longer exists.
+      expect(cache.lookupExif('/photos/a.jpg', 2000, 5000)).toBeUndefined()
+      expect(cache.lookupExif('/photos/a.jpg', 1000, 6000)).toBeUndefined()
+    })
+
+    it('does not create a row for a photo the scan never saw', () => {
+      // Inserting here would leave the row without a date, which the wall reads.
+      cache = new MetadataCache(file())
+      cache.storeExif('/photos/unknown.jpg', 1, 1, exif)
+      expect(cache.lookup('/photos/unknown.jpg', 1, 1)).toBeUndefined()
+      expect(cache.lookupExif('/photos/unknown.jpg', 1, 1)).toBeUndefined()
+    })
+
+    it('replaces stale EXIF when a file is re-parsed', () => {
+      cache = new MetadataCache(file())
+      cache.store('/photos/a.jpg', 1000, 5000, sample)
+      cache.storeExif('/photos/a.jpg', 1000, 5000, exif)
+
+      const updated = { ...exif, iso: 3200 }
+      cache.storeExif('/photos/a.jpg', 1000, 5000, updated)
+      expect(cache.lookupExif('/photos/a.jpg', 1000, 5000)).toEqual(updated)
+    })
+
+    it('drops the full EXIF when the row is pruned', () => {
+      cache = new MetadataCache(file())
+      cache.store('/photos/a.jpg', 1, 1, sample)
+      cache.store('/photos/b.jpg', 1, 1, sample)
+      cache.storeExif('/photos/a.jpg', 1, 1, exif)
+      // Only b.jpg remains in the folder.
+      cache.retain(['/photos/b.jpg'])
+      expect(cache.lookupExif('/photos/a.jpg', 1, 1)).toBeUndefined()
+      expect(cache.lookup('/photos/a.jpg', 1, 1)).toBeUndefined()
+    })
+  })
 })

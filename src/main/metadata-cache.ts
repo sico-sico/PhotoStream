@@ -20,6 +20,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
+import type { RawExif } from '../shared/exif'
 
 export interface CachedMetadata {
   width: number
@@ -33,10 +34,16 @@ interface MetadataRow {
   height: number
   taken_at: string
   orientation: number
+  full_exif: string | null
 }
 
-/** Bumped when the stored shape changes; old rows are then dropped. */
-const SCHEMA_VERSION = 1
+/**
+ * Bumped when the stored shape changes; old rows are then dropped.
+ *
+ * v2 added `full_exif`. Dropping is cheaper than migrating: every value is
+ * derived from the photos and is re-read on demand.
+ */
+const SCHEMA_VERSION = 2
 
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS photo_metadata (
@@ -46,7 +53,10 @@ const SCHEMA = `
     width       INTEGER NOT NULL,
     height      INTEGER NOT NULL,
     taken_at    TEXT    NOT NULL,
-    orientation INTEGER NOT NULL
+    orientation INTEGER NOT NULL,
+    -- Full EXIF as JSON, filled the first time the detail panel is opened.
+    -- NULL means "not read yet", which is different from "the file has none".
+    full_exif   TEXT
   );
   CREATE TABLE IF NOT EXISTS cache_info (
     key   TEXT PRIMARY KEY,
@@ -65,6 +75,8 @@ export class MetadataCache {
   private readonly db: DatabaseSync | null
   private readonly getStatement
   private readonly putStatement
+  private readonly putExifStatement
+  private readonly getExifStatement
   private readonly pruneStatement
 
   constructor(filePath: string) {
@@ -91,10 +103,16 @@ export class MetadataCache {
 
       this.db = db
       this.getStatement = db.prepare(
-        'SELECT width, height, taken_at, orientation FROM photo_metadata WHERE path = ? AND mtime_ms = ? AND size_bytes = ?'
+        'SELECT width, height, taken_at, orientation, full_exif FROM photo_metadata WHERE path = ? AND mtime_ms = ? AND size_bytes = ?'
       )
       this.putStatement = db.prepare(
-        'INSERT OR REPLACE INTO photo_metadata (path, mtime_ms, size_bytes, width, height, taken_at, orientation) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        'INSERT OR REPLACE INTO photo_metadata (path, mtime_ms, size_bytes, width, height, taken_at, orientation, full_exif) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+      )
+      this.putExifStatement = db.prepare(
+        'UPDATE photo_metadata SET full_exif = ? WHERE path = ? AND mtime_ms = ? AND size_bytes = ?'
+      )
+      this.getExifStatement = db.prepare(
+        'SELECT full_exif FROM photo_metadata WHERE path = ? AND mtime_ms = ? AND size_bytes = ?'
       )
       this.pruneStatement = db.prepare('DELETE FROM photo_metadata WHERE path NOT IN (SELECT value FROM json_each(?))')
     } catch {
@@ -102,6 +120,8 @@ export class MetadataCache {
       this.db = null
       this.getStatement = null
       this.putStatement = null
+      this.putExifStatement = null
+      this.getExifStatement = null
       this.pruneStatement = null
     }
   }
@@ -127,9 +147,45 @@ export class MetadataCache {
   store(path: string, mtimeMs: number, sizeBytes: number, meta: CachedMetadata): void {
     if (!this.putStatement) return
     try {
-      this.putStatement.run(path, mtimeMs, sizeBytes, meta.width, meta.height, meta.takenAt, meta.orientation)
+      // `full_exif` is left NULL: the scan does not read it, and NULL means
+      // "not read yet" rather than "this photo has none".
+      this.putStatement.run(path, mtimeMs, sizeBytes, meta.width, meta.height, meta.takenAt, meta.orientation, null)
     } catch {
       // A failed write only costs a re-read next time.
+    }
+  }
+
+  /**
+   * Full EXIF for this exact file version, or `undefined` if it was never read.
+   *
+   * Distinguishing "never read" from "no EXIF" matters: the panel must know
+   * whether to parse the file or to show what it already has.
+   */
+  lookupExif(path: string, mtimeMs: number, sizeBytes: number): RawExif | undefined {
+    if (!this.getExifStatement) return undefined
+    try {
+      const row = this.getExifStatement.get(path, mtimeMs, sizeBytes) as { full_exif: string | null } | undefined
+      if (!row || row.full_exif === null) return undefined
+      return JSON.parse(row.full_exif) as RawExif
+    } catch {
+      // A corrupt JSON blob is treated as "not cached".
+      return undefined
+    }
+  }
+
+  /**
+   * Store the full EXIF after the detail panel has read it.
+   *
+   * Only update an existing row: if the photo is not in the cache the scan never
+   * ran for it, and inserting a partial row here would lose the fields the scan
+   * depends on.
+   */
+  storeExif(path: string, mtimeMs: number, sizeBytes: number, exif: RawExif): void {
+    if (!this.putExifStatement) return
+    try {
+      this.putExifStatement.run(JSON.stringify(exif), path, mtimeMs, sizeBytes)
+    } catch {
+      // Best effort: the panel already got its answer.
     }
   }
 

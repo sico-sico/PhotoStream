@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, act } from '@testing-library/react'
+import { render, screen, act, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { Photo } from '@shared/types'
 import { I18nProvider } from '../i18n/I18nProvider'
@@ -17,6 +17,22 @@ const photo: Photo = {
   mtimeMs: 0,
   sizeBytes: 0
 }
+
+/**
+ * Stand-in for the preload bridge.
+ *
+ * Only the EXIF read is needed here; the viewer otherwise talks to the protocol
+ * and to its props. It is stubbed rather than run for real because jsdom has no
+ * Node bridge.
+ */
+const photoExif = vi.fn(async () => ({ make: 'SONY', model: 'ILCE-7M5', fNumber: 1.8 }))
+beforeEach(() => {
+  photoExif.mockClear()
+  Object.defineProperty(window, 'photoStream', {
+    configurable: true,
+    value: { photoExif }
+  })
+})
 
 function renderViewer(props: Partial<React.ComponentProps<typeof Viewer>> = {}, locale = 'en'): ReturnType<typeof render> {
   return render(
@@ -440,6 +456,88 @@ describe('Viewer', () => {
     const dialog = screen.getByRole('dialog')
     expect(dialog).toHaveAttribute('aria-modal', 'true')
     expect(dialog).toHaveAccessibleName('kyoto.jpg')
+  })
+
+  describe('details panel', () => {
+    it('reads the EXIF only when the panel is opened', async () => {
+      // The read costs a metadata parse, so it must not happen on every open of
+      // the viewer — only when someone asks to see the details.
+      const user = userEvent.setup()
+      renderViewer()
+      expect(photoExif).not.toHaveBeenCalled()
+
+      await user.click(screen.getByRole('button', { name: /details/i }))
+      expect(photoExif).toHaveBeenCalledWith('/photos/kyoto.jpg')
+    })
+
+    it('shows the values once they arrive', async () => {
+      const user = userEvent.setup()
+      renderViewer()
+      await user.click(screen.getByRole('button', { name: /details/i }))
+
+      expect(await screen.findByTestId('info-panel')).toBeInTheDocument()
+      expect(await screen.findByText('SONY ILCE-7M5')).toBeInTheDocument()
+      expect(screen.getByText('f/1.8')).toBeInTheDocument()
+    })
+
+    it('toggles with the I key', async () => {
+      const user = userEvent.setup()
+      renderViewer()
+
+      await user.keyboard('i')
+      expect(await screen.findByTestId('info-panel')).toBeInTheDocument()
+
+      await user.keyboard('i')
+      expect(screen.queryByTestId('info-panel')).toBeNull()
+    })
+
+    it('closes from the panel own button', async () => {
+      const user = userEvent.setup()
+      renderViewer()
+      await user.click(screen.getByRole('button', { name: /details/i }))
+      const panel = await screen.findByTestId('info-panel')
+
+      // Both the toolbar toggle and the panel's own close button use the same
+      // label once the panel is open, so the query is scoped to the panel.
+      await user.click(within(panel).getByRole('button', { name: /hide details/i }))
+      expect(screen.queryByTestId('info-panel')).toBeNull()
+    })
+
+    it('re-reads when stepping to another photo', async () => {
+      // Otherwise the panel would keep describing the previous photo.
+      const user = userEvent.setup()
+      const { rerender } = renderViewer()
+      await user.click(screen.getByRole('button', { name: /details/i }))
+      await screen.findByTestId('info-panel')
+      expect(photoExif).toHaveBeenCalledTimes(1)
+
+      rerender(
+        <I18nProvider preference="en" systemLocales={[]} onLocaleChange={() => {}}>
+          <Viewer
+            photo={{ ...photo, id: 'p2', path: '/photos/paris.jpg', name: 'paris.jpg' }}
+            previewUrl={undefined}
+            onClose={() => {}}
+            onPrev={() => {}}
+            onNext={() => {}}
+            onReveal={() => {}}
+          />
+        </I18nProvider>
+      )
+
+      expect(photoExif).toHaveBeenCalledWith('/photos/paris.jpg')
+      expect(photoExif).toHaveBeenCalledTimes(2)
+    })
+
+    it('marks the toggle as expanded', async () => {
+      const user = userEvent.setup()
+      renderViewer()
+      const toggle = screen.getByRole('button', { name: /details/i })
+      expect(toggle).toHaveAttribute('aria-expanded', 'false')
+
+      await user.click(toggle)
+      // The toolbar toggle keeps its identity and now reports the open state.
+      expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    })
   })
 
   it('localises the interface', () => {

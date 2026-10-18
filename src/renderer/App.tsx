@@ -113,9 +113,16 @@ function AppView({
     },
     getTransform: () => transformRef.current
   })
-  // Frame the wall the first time it has content, and again when the folder
-  // or layout changes, so the user never starts staring at empty space.
-  const fitKey = `${wall.state.dir}|${wall.state.layout}|${wall.layout.width}|${wall.layout.height}`
+  /**
+   * Frame the wall when the folder or the layout *mode* changes.
+   *
+   * The world dimensions are deliberately not part of this key. Zooming out
+   * re-lays the wall out at a wider width so the columns fill the window, and an
+   * earlier version keyed the fit on those dimensions — so every zoom step
+   * looked like "a new wall" and snapped the view back to the top-left, which
+   * the user saw as being thrown back to the first photo.
+   */
+  const fitKey = `${wall.state.dir}|${wall.state.layout}`
   useEffect(() => {
     if (wall.layout.items.length === 0) return
     if (fittedFor.current === fitKey) return
@@ -132,48 +139,52 @@ function AppView({
   )
 
   /**
-   * Arrow keys pan the wall, or move the focus between photos.
+   * Arrow keys move the canvas; Alt+arrows move the focused photo.
    *
-   * Three things must not be hijacked:
+   * Panning must stay on the bare arrows. An earlier version switched them to
+   * "walk the selection" whenever a photo was focused, which meant that simply
+   * viewing a photo and closing the viewer silently took away the ability to
+   * pan — the wall then only crept one tile at a time around the selection.
+   * Alt is the modifier used for the rarer action instead.
+   *
+   * Four things must not be hijacked:
    * - the viewer, which already uses the arrows to step through photos;
    * - a text field, where the arrows move the caret;
-   * - a menu, which uses them for its own navigation.
+   * - a menu, which uses them for its own navigation;
+   * - any browser/app shortcut that arrives already handled.
    */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.defaultPrevented) return
       if (wall.openPhoto) return
-      if (event.altKey || event.ctrlKey || event.metaKey) return
+      if (event.ctrlKey || event.metaKey) return
       if (!isPanKey(event.key)) return
 
       const target = event.target as HTMLElement | null
       if (target?.closest('input, textarea, select, [contenteditable="true"]')) return
       if (target?.closest('.menu-panel')) return
 
-      const layoutByItem = new Map(wall.layout.items.map((item) => [item.id, item]))
-
-      if (wall.state.selectedId) {
-        // A photo is focused: move the focus, not the canvas. The wall then
-        // scrolls only if the new photo would be off screen.
+      if (event.altKey) {
+        // Alt+arrow: move the focus to the neighbouring photo, scrolling only
+        // when the new one would be off screen.
+        if (!wall.state.selectedId) return
+        const layoutByItem = new Map(wall.layout.items.map((item) => [item.id, item]))
         const current = layoutByItem.get(wall.state.selectedId)
-        if (current) {
-          const nextId = neighbourInDirection(wall.layout.items, current, event.key)
-          if (nextId) {
-            event.preventDefault()
-            // `focus`, not `select`: the viewer is closed here, so the arrows
-            // walk the wall rather than reopening photo after photo.
-            wall.focus(nextId)
-            const next = layoutByItem.get(nextId)
-            const centre = next ? { x: next.x + next.w / 2, y: next.y + next.h / 2 } : null
-            if (centre && !isComfortablyVisible(wall.transform, centre, viewport)) {
-              moveWithAnimation(centerOn(wall.transform, centre, viewport))
-            }
-            return
-          }
+        if (!current) return
+
+        const nextId = neighbourInDirection(wall.layout.items, current, event.key)
+        if (!nextId) return
+        event.preventDefault()
+        wall.focus(nextId)
+        const next = layoutByItem.get(nextId)
+        const centre = next ? { x: next.x + next.w / 2, y: next.y + next.h / 2 } : null
+        if (centre && !isComfortablyVisible(wall.transform, centre, viewport)) {
+          moveWithAnimation(centerOn(wall.transform, centre, viewport))
         }
+        return
       }
 
-      // Nothing selected, or no neighbour in that direction: pan the canvas.
+      // Bare arrow: pan the whole wall, always.
       event.preventDefault()
       moveWithAnimation(panByKey(wall.transform, event.key, viewport, event.shiftKey))
     }

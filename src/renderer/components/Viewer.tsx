@@ -15,7 +15,9 @@ import {
   type ViewerMetrics
 } from '@shared/transform'
 import { beginPinch, isPinch, midpoint, pinchScale, type PinchPoint, type PinchStart } from '@shared/pinch'
+import type { RawExif } from '@shared/exif'
 import { useI18n } from '../i18n/context'
+import { InfoPanel } from './InfoPanel'
 
 export interface ViewerProps {
   photo: Photo
@@ -62,6 +64,10 @@ export function Viewer({ photo, previewUrl, onClose, onPrev, onNext, onReveal }:
   const [dragging, setDragging] = useState(false)
   /** Non-null while two or more fingers are down. */
   const [pinching, setPinching] = useState(false)
+  /** Whether the EXIF detail panel is expanded. */
+  const [infoOpen, setInfoOpen] = useState(false)
+  /** `null` until the read finishes; `{}` when the file carries no EXIF. */
+  const [exif, setExif] = useState<RawExif | null>(null)
 
   const stageRef = useRef<HTMLDivElement | null>(null)
   const imageRef = useRef<HTMLImageElement | null>(null)
@@ -98,6 +104,32 @@ export function Viewer({ photo, previewUrl, onClose, onPrev, onNext, onReveal }:
     setFullLoaded(false)
     setNatural({ width: 0, height: 0 })
   }, [photo.id])
+
+  /**
+   * Read the EXIF details only while the panel is open.
+   *
+   * The read is per-photo and costs a full metadata parse, so it is deferred
+   * until asked for; the panel also re-reads when stepping to the next photo so
+   * the values never describe the previous one.
+   */
+  useEffect(() => {
+    if (!infoOpen) return
+    let cancelled = false
+    setExif(null)
+    void window.photoStream
+      .photoExif(photo.path)
+      .then((result) => {
+        if (!cancelled) setExif(result ?? {})
+      })
+      .catch(() => {
+        // An unreadable file still shows the file-level rows rather than an
+        // empty panel.
+        if (!cancelled) setExif({})
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [infoOpen, photo.id, photo.path])
 
   // Each photo starts fitted and upright: carrying a zoom across a photo change
   // disorients, and a rotation belongs to the photo it was applied to.
@@ -227,6 +259,7 @@ export function Viewer({ photo, previewUrl, onClose, onPrev, onNext, onReveal }:
       else if (event.key === '-' || event.key === '_') zoomByFactor(1 / 1.25)
       else if (event.key === 'r' || event.key === 'R' || event.key === ']') rotateBy(90)
       else if (event.key === '[') rotateBy(-90)
+      else if (event.key === 'i' || event.key === 'I') setInfoOpen((open) => !open)
       else return
       // Only swallow the keys the viewer actually handled.
       event.preventDefault()
@@ -386,40 +419,49 @@ export function Viewer({ photo, previewUrl, onClose, onPrev, onNext, onReveal }:
 
   return (
     <div className="viewer" role="dialog" aria-modal="true" aria-label={photo.name} data-testid="viewer">
-      <div
-        className={`viewer-stage ${transformed ? 'zoomed' : ''} ${dragging ? 'dragging' : ''} ${pinching ? 'pinching' : ''}`}
-        ref={stageRef}
-        data-testid="viewer-stage"
-        style={transformed ? { touchAction: 'none' } : undefined}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={(event) => endGesture(event)}
-        onPointerCancel={(event) => endGesture(event, true)}
-        onDoubleClick={reset}
-      >
-        {previewUrl ? (
+      {/*
+        The stage and the details panel share a row so the photo stays visible
+        while its settings are read; the panel takes width rather than covering
+        the image.
+      */}
+      <div className="viewer-main">
+        <div
+          className={`viewer-stage ${transformed ? 'zoomed' : ''} ${dragging ? 'dragging' : ''} ${pinching ? 'pinching' : ''}`}
+          ref={stageRef}
+          data-testid="viewer-stage"
+          style={transformed ? { touchAction: 'none' } : undefined}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={(event) => endGesture(event)}
+          onPointerCancel={(event) => endGesture(event, true)}
+          onDoubleClick={reset}
+        >
+          {previewUrl ? (
+            <img
+              className={`viewer-image preview ${fullLoaded ? 'hidden' : ''}`}
+              src={previewUrl}
+              alt=""
+              aria-hidden="true"
+              style={{ ...sizeStyle, ...imageStyle }}
+              draggable={false}
+            />
+          ) : null}
           <img
-            className={`viewer-image preview ${fullLoaded ? 'hidden' : ''}`}
-            src={previewUrl}
-            alt=""
-            aria-hidden="true"
+            className={`viewer-image ${fullLoaded ? 'ready' : ''}`}
+            data-testid="viewer-image"
+            src={`pic://photo/${encodeURIComponent(photo.name)}`}
+            alt={photo.name}
             style={{ ...sizeStyle, ...imageStyle }}
             draggable={false}
+            ref={imageRef}
+            onLoad={(event) => {
+              setNatural({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })
+              setFullLoaded(true)
+            }}
           />
-        ) : null}
-        <img
-          className={`viewer-image ${fullLoaded ? 'ready' : ''}`}
-          data-testid="viewer-image"
-          src={`pic://photo/${encodeURIComponent(photo.name)}`}
-          alt={photo.name}
-          style={{ ...sizeStyle, ...imageStyle }}
-          draggable={false}
-          ref={imageRef}
-          onLoad={(event) => {
-            setNatural({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })
-            setFullLoaded(true)
-          }}
-        />
+        </div>
+
+        {infoOpen ? <InfoPanel photo={photo} exif={exif} onClose={() => setInfoOpen(false)} /> : null}
       </div>
 
       <div className="viewer-bar">
@@ -435,6 +477,16 @@ export function Viewer({ photo, previewUrl, onClose, onPrev, onNext, onReveal }:
             {rotation !== 0 ? ` · ${rotation}°` : ''}
           </span>
         </div>
+        <button
+          type="button"
+          className={`button ghost ${infoOpen ? 'active' : ''}`}
+          onClick={() => setInfoOpen((open) => !open)}
+          aria-label={infoOpen ? t('viewer.hideInfo') : t('viewer.info')}
+          aria-expanded={infoOpen}
+          title={`${infoOpen ? t('viewer.hideInfo') : t('viewer.info')} (I)`}
+        >
+          ⓘ
+        </button>
         <button
           type="button"
           className="button ghost"

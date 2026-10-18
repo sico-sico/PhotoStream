@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AppInfo, Photo, Settings, ThumbLevel } from '../shared/types'
+import type { RawExif } from '../shared/exif'
 import { IPC } from '../shared/ipc'
 
 /**
@@ -23,6 +24,8 @@ export interface PhotoStreamApi {
   /** One rendition that just finished: `[photoId, url, level]`. */
   onThumbReady: (listener: (entry: [string, string, ThumbLevel]) => void) => () => void
   revealInFolder: (path: string) => Promise<void>
+  /** Full EXIF for one photo, read on demand for the viewer's info panel. */
+  photoExif: (path: string) => Promise<RawExif>
   minimize: () => Promise<void>
   toggleMaximize: () => Promise<boolean>
   close: () => Promise<void>
@@ -47,6 +50,7 @@ const api: PhotoStreamApi = {
     return () => ipcRenderer.off(IPC.thumbReady, handler)
   },
   revealInFolder: (path) => ipcRenderer.invoke(IPC.revealInFolder, path),
+  photoExif: (path) => ipcRenderer.invoke(IPC.photoExif, path),
   minimize: () => ipcRenderer.invoke(IPC.windowMinimize),
   toggleMaximize: () => ipcRenderer.invoke(IPC.windowToggleMaximize),
   close: () => ipcRenderer.invoke(IPC.windowClose),

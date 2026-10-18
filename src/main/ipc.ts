@@ -9,8 +9,9 @@ import { loadSettings, saveSettings } from './settings-store'
 import { watchDirectory, type DirectoryWatcher, type RawWatchEvent } from './watcher'
 import { thumbUrl, photoUrl } from './protocol'
 import { findPhoto, removePhoto, sortPhotos, upsertPhoto } from '../shared/photoStore'
-import { readImageMetadata } from './metadata'
+import { readImageMetadata, readFullExif } from './metadata'
 import type { MetadataCache } from './metadata-cache'
+import type { RawExif } from '../shared/exif'
 import { locales } from '../shared/i18n'
 
 /**
@@ -27,7 +28,7 @@ export class PhotoLibrary {
     readonly thumbCacheDir: string,
     private readonly notify: (channel: string, payload: unknown) => void,
     /** Cache of parsed EXIF, keyed by path + mtime + size. */
-    private readonly metadataCache?: MetadataCache
+    readonly metadataCache?: MetadataCache
   ) {}
 
   get directory(): string {
@@ -110,6 +111,11 @@ export class PhotoLibrary {
   private async refresh(path: string): Promise<Photo | null> {
     try {
       const [info, meta] = await Promise.all([stat(path), readImageMetadata(path)])
+      // A changed file has a new mtime/size, so any existing row no longer
+      // matches. Writing the fresh parse keeps the cache useful after a
+      // re-export: without it, the next launch would re-read the 512 KB prefix
+      // for a photo that had just been parsed here.
+      this.metadataCache?.store(path, info.mtimeMs, info.size, meta)
       const photo: Photo = {
         id: path.toLowerCase(),
         path,
@@ -260,4 +266,30 @@ export function registerIpc(deps: IpcDeps): void {
   })
 
   ipcMain.handle(IPC.windowState, (event): boolean => windowOf(event)?.isMaximized() ?? false)
+
+  /**
+   * Full EXIF for one photo.
+   *
+   * The renderer supplies a path, so the request is untrusted: only photos the
+   * library already knows about are readable. That reuses the same boundary as
+   * `pic://` rather than inventing a second one, and stops a compromised
+   * renderer from reading arbitrary files on disk.
+   *
+   * The first open of a photo parses the file and writes the result back, so
+   * every later open — including after a restart — is a cache hit. That keeps
+   * the scan from paying for fields nobody has looked at while still making the
+   * common case (re-opening a photo you already inspected) instant.
+   */
+  ipcMain.handle(IPC.photoExif, async (_event, path: unknown): Promise<RawExif> => {
+    if (typeof path !== 'string') return {}
+    const photo = findPhoto(deps.library.all, path)
+    if (!photo) return {}
+
+    const cached = deps.library.metadataCache?.lookupExif(photo.path, photo.mtimeMs, photo.sizeBytes)
+    if (cached) return cached
+
+    const exif = await readFullExif(photo.path)
+    deps.library.metadataCache?.storeExif(photo.path, photo.mtimeMs, photo.sizeBytes, exif)
+    return exif
+  })
 }

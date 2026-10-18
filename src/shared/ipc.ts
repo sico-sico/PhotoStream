@@ -10,6 +10,7 @@ export const IPC = {
   thumbUrls: 'thumb:urls',
   thumbReady: 'thumb:ready',
   thumbProgress: 'thumb:progress',
+  photoExif: 'photo:exif',
   revealInFolder: 'shell:reveal',
   windowMinimize: 'window:minimize',
   windowToggleMaximize: 'window:toggleMaximize',

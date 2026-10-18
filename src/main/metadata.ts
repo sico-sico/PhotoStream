@@ -3,6 +3,7 @@ import { imageSize } from 'image-size'
 import sharp from 'sharp'
 import exifReader from 'exif-reader'
 import { exifDateToIsoDate } from '../shared/date'
+import type { RawExif } from '../shared/exif'
 
 /**
  * Reading capture metadata.
@@ -165,4 +166,146 @@ export async function parseImageBuffer(buffer: Buffer): Promise<ImageMetadata> {
 export async function readImageMetadata(path: string): Promise<ImageMetadata> {
   const buffer = await readPrefix(path, METADATA_PREFIX_BYTES)
   return parseImageBuffer(buffer)
+}
+
+/**
+ * Read every EXIF field the detail panel shows.
+ *
+ * Separate from `readImageMetadata` on purpose: the scan runs this over thousands
+ * of files and only needs the date, while the panel opens for one photo at a
+ * time and can afford a full parse. Keeping them apart is what stops the scan
+ * from paying for fields nobody has asked to see yet.
+ */
+export async function readFullExif(path: string): Promise<RawExif> {
+  const buffer = await readPrefix(path, METADATA_PREFIX_BYTES)
+  let document: Record<string, unknown> = {}
+
+  try {
+    const metadata = await sharp(buffer).metadata()
+    if (metadata.exif) {
+      document = exifReader(metadata.exif) as unknown as Record<string, unknown>
+    }
+  } catch {
+    // No readable EXIF: the panel still shows the file-level rows.
+    return {}
+  }
+
+  // `exif-reader` groups tags by IFD. Photo holds most capture settings, Image
+  // holds the maker and software, GPS holds the position.
+  const photo = section(document, 'Photo')
+  const image = section(document, 'Image')
+  const gps = section(document, 'GPS')
+
+  return {
+    make: text(image['Make'] ?? photo['Make']),
+    model: text(image['Model'] ?? photo['Model']),
+    lens: text(photo['LensModel'] ?? photo['LensMake']),
+    focalLength: number(photo['FocalLength']),
+    focalLength35: number(photo['FocalLengthIn35mmFilm']),
+    fNumber: number(photo['FNumber'] ?? photo['ApertureValue']),
+    exposureTime: number(photo['ExposureTime']),
+    iso: number(photo['ISOSpeedRatings'] ?? photo['PhotographicSensitivity']),
+    exposureBias: number(photo['ExposureBiasValue']),
+    flash: flashFired(photo['Flash']),
+    meteringMode: METERING_MODES[number(photo['MeteringMode']) ?? -1],
+    whiteBalance: WHITE_BALANCE_MODES[number(photo['WhiteBalance']) ?? -1],
+    latitude: coordinate(gps['GPSLatitude'], gps['GPSLatitudeRef'], 'lat'),
+    longitude: coordinate(gps['GPSLongitude'], gps['GPSLongitudeRef'], 'lon'),
+    altitude: number(gps['GPSAltitude']),
+    capturedAt: timestamp(photo['DateTimeOriginal'] ?? photo['CreateDate'] ?? image['DateTime']),
+    software: text(image['Software'])
+  }
+}
+
+function section(document: Record<string, unknown>, name: string): Record<string, unknown> {
+  const value = document[name]
+  return value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
+}
+
+function text(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  // Writers pad these fields with spaces and NULs.
+  const trimmed = value.replace(/\0+$/, '').trim()
+  return trimmed.length > 0 ? trimmed : undefined
+}
+
+function number(value: unknown): number | undefined {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined
+  if (typeof value === 'string') {
+    const parsed = Number.parseFloat(value)
+    return Number.isFinite(parsed) ? parsed : undefined
+  }
+  // Some tags arrive as [numerator, denominator].
+  if (Array.isArray(value) && value.length === 2) {
+    const [numerator, denominator] = value.map(Number)
+    return denominator ? numerator / denominator : undefined
+  }
+  return undefined
+}
+
+/** EXIF Flash is a bit field; bit 0 records whether the flash fired. */
+function flashFired(value: unknown): boolean | undefined {
+  const flag = number(value)
+  return flag === undefined ? undefined : (flag & 1) === 1
+}
+
+/**
+ * Rebuild the local wall-clock time the camera recorded.
+ *
+ * `exif-reader` builds the `Date` from the wall-clock fields as if they were
+ * UTC, so reading it back with the UTC accessors reproduces the original
+ * timestamp without a timezone shift.
+ */
+function timestamp(value: unknown): string | undefined {
+  if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
+    return typeof value === 'string' ? value.trim() || undefined : undefined
+  }
+  const year = value.getUTCFullYear()
+  if (year < MIN_PLAUSIBLE_YEAR) return undefined
+  return (
+    `${year}-${pad(value.getUTCMonth() + 1)}-${pad(value.getUTCDate())} ` +
+    `${pad(value.getUTCHours())}:${pad(value.getUTCMinutes())}:${pad(value.getUTCSeconds())}`
+  )
+}
+
+const METERING_MODES: Record<number, string> = {
+  0: 'Unknown',
+  1: 'Average',
+  2: 'Centre-weighted average',
+  3: 'Spot',
+  4: 'Multi-spot',
+  5: 'Pattern',
+  6: 'Partial'
+}
+
+const WHITE_BALANCE_MODES: Record<number, string> = {
+  0: 'Auto',
+  1: 'Manual'
+}
+
+/**
+ * Convert an EXIF GPS rational triple into decimal degrees.
+ *
+ * `exif-reader` may hand back either a pre-computed decimal or the raw
+ * [degrees, minutes, seconds] array depending on the file's EXIF version, so
+ * both shapes are accepted.
+ */
+function coordinate(value: unknown, reference: unknown, axis: 'lat' | 'lon'): number | undefined {
+  let decimal: number | undefined
+
+  if (Array.isArray(value) && value.length === 3) {
+    const [degrees, minutes, seconds] = value.map((part) => number(part) ?? 0)
+    decimal = degrees + minutes / 60 + seconds / 3600
+  } else {
+    decimal = number(value)
+  }
+
+  if (decimal === undefined || !Number.isFinite(decimal)) return undefined
+
+  const ref = text(reference)?.toUpperCase()
+  const negative = ref === 'S' || ref === 'W'
+  const magnitude = Math.abs(decimal)
+  const limit = axis === 'lat' ? 90 : 180
+  if (magnitude > limit) return undefined
+  return negative ? -magnitude : magnitude
 }

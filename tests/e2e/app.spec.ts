@@ -276,20 +276,38 @@ test('pans the wall with the arrow keys', async () => {
   expect(await transformOf()).not.toBe(afterDown)
 })
 
-test('moves the selection with the arrow keys', async () => {
+test('arrow keys pan the wall even after a photo has been viewed', async () => {
   await useEnglish()
 
-  // Return the wall to a fitted, unzoomed state: earlier tests leave it zoomed
-  // and panned far enough that no tile is mounted (they are culled), and a
-  // culled wall has nothing to click. Switching layouts changes the fit key,
-  // which re-fits the view; clicking the already-active layout would be a no-op.
+  // Reset to a fitted wall: earlier tests leave it zoomed and panned far enough
+  // that the culled set can be empty. Switching layouts changes the fit key.
   await page.keyboard.press('Escape')
   await page.getByRole('button', { name: 'Square' }).click()
   await page.getByRole('button', { name: 'Rows' }).click()
   await expect(page.locator('[data-photo-id]').first()).toBeVisible()
 
-  // Opening and closing a photo leaves it focused, which is what the arrow keys
-  // act on; that is the whole point of closing the viewer instead of deselecting.
+  // Viewing a photo leaves it focused. This used to hijack the arrow keys: they
+  // walked the selection instead of panning, so the wall could only creep one
+  // tile at a time around the focused photo and never move freely again.
+  await page.locator('[data-photo-id]').first().click()
+  const viewer = page.getByRole('dialog')
+  await expect(viewer).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(viewer).toBeHidden()
+
+  const world = page.locator('[data-testid="world"]')
+  const transformOf = () => world.evaluate((el: HTMLElement) => el.style.transform)
+  const before = await transformOf()
+
+  await page.keyboard.press('ArrowRight')
+  await expect.poll(transformOf).not.toBe(before)
+
+  // The viewer must not reopen while panning.
+  await expect(viewer).toBeHidden()
+})
+
+test('alt+arrows move the focused photo', async () => {
+  await useEnglish()
   await page.locator('[data-photo-id]').first().click()
   const viewer = page.getByRole('dialog')
   await expect(viewer).toBeVisible()
@@ -302,22 +320,54 @@ test('moves the selection with the arrow keys', async () => {
   const first = await selected()
   expect(first).toBeTruthy()
 
-  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('Alt+ArrowRight')
   await expect.poll(selected).not.toBe(first)
 
-  const second = await selected()
-  expect(second).toBeTruthy()
-
-  await page.keyboard.press('ArrowLeft')
+  await page.keyboard.press('Alt+ArrowLeft')
   await expect.poll(selected).toBe(first)
 
-  // The viewer must stay closed: the arrows move the highlight, they do not
-  // reopen every photo on the way.
   await expect(viewer).toBeHidden()
+})
+
+test('zooming out does not jump back to the first photo', async () => {
+  await useEnglish()
+  const world = page.locator('[data-testid="world"]')
+
+  // Pan well away from the start.
+  for (let i = 0; i < 5; i += 1) await page.keyboard.press('Shift+ArrowDown')
+  await page.waitForTimeout(400)
+
+  const yBefore = await world.evaluate((el: HTMLElement) => {
+    const m = /translate3d\((-?[\d.]+)px,\s*(-?[\d.]+)px/.exec(el.style.transform)
+    return m ? Number(m[2]) : 0
+  })
+  expect(yBefore).toBeLessThan(-500)
+
+  // Zooming out re-lays the wall out at a wider width. That reflow used to look
+  // like a brand-new wall to the fit logic, which snapped the view to the top —
+  // experienced as being thrown back to the first photo.
+  const stage = (await page.getByTestId('stage').boundingBox())!
+  await page.mouse.move(stage.x + stage.width / 2, stage.y + stage.height / 2)
+  await page.mouse.wheel(0, 300)
+  await page.waitForTimeout(700)
+
+  const yAfter = await world.evaluate((el: HTMLElement) => {
+    const m = /translate3d\((-?[\d.]+)px,\s*(-?[\d.]+)px/.exec(el.style.transform)
+    return m ? Number(m[2]) : 0
+  })
+
+  // Still deep in the library, not back at the top.
+  expect(yAfter).toBeLessThan(-500)
 })
 
 test('steps through photos with the arrows while the viewer is open', async () => {
   await useEnglish()
+  // Reset the view: the previous test pans deep into the library, and a culled
+  // wall has no tiles to click. Switching layout modes re-fits the view.
+  await page.getByRole('button', { name: 'Square' }).click()
+  await page.getByRole('button', { name: 'Rows' }).click()
+  await expect(page.locator('[data-photo-id]').first()).toBeVisible()
+
   await page.locator('[data-photo-id]').first().click()
   const viewer = page.getByRole('dialog')
   await expect(viewer).toBeVisible()

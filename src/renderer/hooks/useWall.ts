@@ -5,6 +5,7 @@ import { applyFilters } from '@shared/filters'
 import { computeLayout } from '@shared/layout'
 import { pickThumbLevel, REFERENCE_TILE } from '@shared/thumbs'
 import { fitWallTransform, type Transform } from '@shared/transform'
+import { reanchorTransform } from '@shared/reanchor'
 import { INITIAL_STATE, reducer } from '../state/wallReducer'
 
 /** Quality order, used to reject results that would downgrade a tile. */
@@ -64,6 +65,9 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
   // The reducer owns the locale so persistence has a single source of truth;
   // a ref mirrors it for callbacks that must not be re-created on every change.
   const localeRef = useRef('')
+  /** Latest viewport, read by effects that must not re-run on every resize. */
+  const viewportRef = useRef(viewport)
+  viewportRef.current = viewport
 
   const visiblePhotos = useMemo(() => applyFilters(state.photos, state.filters), [state.photos, state.filters])
 
@@ -94,6 +98,29 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
       }),
     [visiblePhotos, state.layout, layoutWidth]
   )
+
+  /**
+   * Keep the view anchored when a re-layout moves every tile.
+   *
+   * Zooming out changes `layoutWidth`, so the whole wall is re-flowed: without
+   * this, the transform would still point at the old coordinates and the view
+   * jumped — reported as "zooming sends me back to the first photo".
+   *
+   * The scroll is applied on the next frame, because the new layout has to be in
+   * place before its geometry can be measured.
+   */
+  const previousLayout = useRef(layout)
+  useEffect(() => {
+    const before = previousLayout.current
+    previousLayout.current = layout
+    if (before === layout) return
+    if (before.items.length === 0 || layout.items.length === 0) return
+    // Only a geometry change matters; the same items at the same places have
+    // nothing to re-anchor.
+    if (before.width === layout.width && before.height === layout.height) return
+
+    setTransform((current) => reanchorTransform(current, before, layout, viewportRef.current))
+  }, [layout])
 
   const thumbLevel = useMemo(
     () => pickThumbLevel(REFERENCE_TILE, transform.scale, window.devicePixelRatio || 1),
