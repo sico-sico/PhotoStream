@@ -211,9 +211,11 @@ export async function scanDirectory(dir: string, options: ScanOptions = {}): Pro
 
   await Promise.all(Array.from({ length: Math.min(concurrency, names.length) }, worker))
 
-  // Drop rows for files that no longer exist, so the database does not grow
-  // with every folder ever opened.
-  options.cache?.retain(photos.map((photo) => photo.path))
+  // Drop rows for files that no longer exist in *this* folder, so the database
+  // does not grow with every re-export. Scoped to the folder: the cache is
+  // shared by every library the user has opened, and wiping the others would
+  // defeat the point of remembering them.
+  options.cache?.retain(absolute, photos.map((photo) => photo.path))
 
   return {
     dir: absolute,

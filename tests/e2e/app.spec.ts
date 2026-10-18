@@ -848,6 +848,15 @@ test('keeps the EXIF panel open while stepping through photos', async () => {
   await openLibrary()
   await openPhoto('Kyoto')
   await expect(page.getByTestId('info-panel')).toBeVisible()
+
+  // Reset the preference before leaving. It is persisted, so leaving it on
+  // would reopen the viewer with the panel expanded for every later test in
+  // this file — the panel overlaps the toolbar, and an unrelated test then
+  // failed clicking the gear menu.
+  await page.keyboard.press('i')
+  await expect(page.getByTestId('info-panel')).toBeHidden()
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(500)
 })
 
 test('persists the chosen layout and language across a restart', async () => {
