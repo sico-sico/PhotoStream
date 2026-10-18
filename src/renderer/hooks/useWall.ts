@@ -4,7 +4,7 @@ import { DEFAULT_SETTINGS } from '@shared/types'
 import { applyFilters } from '@shared/filters'
 import { computeLayout } from '@shared/layout'
 import { pickThumbLevel, REFERENCE_TILE } from '@shared/thumbs'
-import { fitTransform, type Transform } from '@shared/transform'
+import { fitWallTransform, type Transform } from '@shared/transform'
 import { INITIAL_STATE, reducer } from '../state/wallReducer'
 
 /** Quality order, used to reject results that would downgrade a tile. */
@@ -224,7 +224,7 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
 
   const fitToView = useCallback(
     (size: { width: number; height: number }) => {
-      setTransform(fitTransform(layout.width, layout.height, size.width, size.height, { maxScale: 1 }))
+      setTransform(fitWallTransform(layout.width, layout.height, size.width, size.height, { maxScale: 1 }))
     },
     [layout.width, layout.height]
   )

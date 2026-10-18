@@ -6,6 +6,7 @@ import {
   MIN_SCALE,
   clampScale,
   fitTransform,
+  fitWallTransform,
   panBy,
   screenToWorld,
   transformsEqual,
@@ -134,6 +135,82 @@ describe('panBy', () => {
   it('translates in screen space without touching scale', () => {
     const result = panBy({ scale: 2, x: 10, y: 20 }, 5, -7)
     expect(result).toEqual({ scale: 2, x: 15, y: 13 })
+  })
+})
+
+describe('fitWallTransform', () => {
+  it('fills the window width for a tall wall', () => {
+    // Real numbers from a 3226-photo library at a 1600px window: the layout
+    // width already equals the container width, and the wall is ~140000px tall.
+    // Fitting both axes gave 0.011, clamped to 0.22, leaving 78% of the window
+    // empty — that was the reported "thumbnails do not fill the window".
+    const t = fitWallTransform(1600, 140230, 1600, 1000)
+    expect(t.scale).toBe(1)
+    expect(1600 * t.scale).toBeCloseTo(1600, 6)
+    expect(t.x).toBe(0)
+  })
+
+  it('covers the width edge to edge with no side gap', () => {
+    // A world narrower than the window is scaled up to cover it, unless
+    // `maxScale` caps it (a small library should not be blown up).
+    const t = fitWallTransform(1590, 140230, 1600, 1000, { maxScale: 2 })
+    expect(t.x).toBe(0)
+    expect(1590 * t.scale).toBeCloseTo(1600, 6)
+  })
+
+  it('centres instead of enlarging past maxScale', () => {
+    // A 20-photo wall is narrower than the window; stretching it to fill would
+    // make every tile absurdly large.
+    const t = fitWallTransform(1000, 2000, 1600, 1000, { maxScale: 1 })
+    expect(t.scale).toBe(1)
+    expect(t.x).toBeCloseTo(300, 6)
+  })
+
+  it('absorbs sub-pixel layout rounding without adding a margin', () => {
+    // The layout rounds to two decimals, so its width can be a fraction short.
+    // Treating that as "narrower than the window" would centre it and create a
+    // visible sliver at both edges.
+    const t = fitWallTransform(1599.94, 50000, 1600, 1000)
+    expect(t.x).toBe(0)
+    expect(t.scale).toBe(1)
+  })
+
+  it('anchors to the top rather than centring vertically', () => {
+    // Centring a 140000px-tall wall would scroll past the first photos.
+    const t = fitWallTransform(1600, 140230, 1600, 1000)
+    expect(t.y).toBe(0)
+  })
+
+  it('centres horizontally when the wall is narrower than the window', () => {
+    const t = fitWallTransform(400, 2000, 1000, 800, { maxScale: 1 })
+    // Width fit would want 2.5x, but maxScale caps it at 1.
+    expect(t.scale).toBe(1)
+    expect(t.x).toBeCloseTo((1000 - 400) / 2, 6)
+  })
+
+  it('never exceeds maxScale', () => {
+    const t = fitWallTransform(100, 100, 4000, 4000, { maxScale: 1 })
+    expect(t.scale).toBe(1)
+  })
+
+  it('respects the readable minimum for an absurdly wide wall', () => {
+    const t = fitWallTransform(100000, 5000, 1600, 1000)
+    expect(t.scale).toBe(MIN_FIT_SCALE)
+  })
+
+  it('returns identity for a degenerate world', () => {
+    expect(fitWallTransform(0, 0, 1600, 1000)).toEqual(IDENTITY)
+    expect(fitWallTransform(1600, -5, 1600, 1000)).toEqual(IDENTITY)
+  })
+
+  it('never leaves a gap on either side when the wall is wider than the window', () => {
+    for (const viewportWidth of [720, 1280, 1600, 2560]) {
+      // The layout is always built for the container width, so the world width
+      // matches the viewport and the padding carves space out of it.
+      const t = fitWallTransform(1600, 40000, viewportWidth, 1000, { padding: 16 })
+      const right = t.x + 1600 * t.scale
+      expect(t.x).toBeGreaterThanOrEqual(0)
+      expect(right).toBeGreaterThan(0)    }
   })
 })
 

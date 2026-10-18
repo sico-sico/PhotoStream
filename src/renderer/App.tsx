@@ -7,7 +7,7 @@ import { usePanZoom } from './hooks/usePanZoom'
 import { useWall } from './hooks/useWall'
 import { I18nProvider } from './i18n/I18nProvider'
 import { useI18n } from './i18n/context'
-import { fitTransform } from '@shared/transform'
+import { fitWallTransform } from '@shared/transform'
 import type { AppInfo } from '@shared/types'
 
 /** Measure an element's box, re-measuring on resize. */
@@ -84,8 +84,9 @@ function AppView({
     if (wall.layout.items.length === 0) return
     if (fittedFor.current === fitKey) return
     fittedFor.current = fitKey
+    // Fit by width: a tall wall is opened at the top, at full window width.
     wall.setTransform(
-      fitTransform(wall.layout.width, wall.layout.height, viewport.width, viewport.height, { maxScale: 1 })
+      fitWallTransform(wall.layout.width, wall.layout.height, viewport.width, viewport.height, { maxScale: 1 })
     )
   }, [fitKey, viewport.height, viewport.width, wall])
 

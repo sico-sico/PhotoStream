@@ -48,22 +48,28 @@ function round(n: number): number {
 
 function squareLayout(photos: readonly Photo[], cell: number, gap: number, containerWidth: number): LayoutResult {
   const columns = Math.max(1, Math.floor((containerWidth + gap) / (cell + gap)))
+  // Distribute the leftover width across the columns instead of discarding it.
+  // `floor` above leaves up to a full cell unused, which showed as a 150-180px
+  // empty strip on the right of an otherwise square grid.
+  const fitted = (containerWidth - gap * (columns - 1)) / columns
+  const cellWidth = fitted > 0 ? round(fitted) : cell
+
   const items: LayoutItem[] = photos.map((photo, index) => {
     const col = index % columns
     const row = Math.floor(index / columns)
     return {
       id: photo.id,
-      x: round(col * (cell + gap)),
-      y: round(row * (cell + gap)),
-      w: cell,
-      h: cell
+      x: round(col * (cellWidth + gap)),
+      y: round(row * (cellWidth + gap)),
+      w: cellWidth,
+      h: cellWidth
     }
   })
   const rows = Math.ceil(photos.length / columns)
   return {
     items,
-    width: round(columns * cell + (columns - 1) * gap),
-    height: rows === 0 ? 0 : round(rows * cell + (rows - 1) * gap)
+    width: round(columns * cellWidth + (columns - 1) * gap),
+    height: rows === 0 ? 0 : round(rows * cellWidth + (rows - 1) * gap)
   }
 }
 

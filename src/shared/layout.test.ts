@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Photo } from './types'
-import { LAYOUT_DEFAULTS, computeLayout, layoutBounds } from './layout'
+import { computeLayout, layoutBounds } from './layout'
 
 function photo(id: string, width: number, height: number): Photo {
   return { id, path: `/p/${id}.jpg`, name: `${id}.jpg`, width, height, takenAt: '', dateSource: 'none', mtimeMs: 0, sizeBytes: 0 }
@@ -56,18 +56,28 @@ describe('computeLayout', () => {
   describe('square mode', () => {
     it('gives every tile the same size', () => {
       const { items } = computeLayout([landscape, portrait, square], { mode: 'square', containerWidth: 1000 })
-      expect(new Set(items.map((item) => item.w))).toEqual(new Set([LAYOUT_DEFAULTS.cellSize]))
-      expect(new Set(items.map((item) => item.h))).toEqual(new Set([LAYOUT_DEFAULTS.cellSize]))
+      expect(new Set(items.map((item) => item.w)).size).toBe(1)
+      expect(new Set(items.map((item) => item.h)).size).toBe(1)
+      expect(items[0].w).toBe(items[0].h)
     })
 
-    it('fits whole columns inside the container plus one gap of slack', () => {
-      // floor((1000 + 8) / (200 + 8)) = 4 columns
+    it('sizes cells to fill the container width exactly', () => {
+      // `floor` on the column count used to leave up to a full cell unused,
+      // which showed as a 150-180px empty strip on the right.
+      const photos = Array.from({ length: 9 }, (_, i) => photo(`p${i}`, 1, 1))
+      const result = computeLayout(photos, { mode: 'square', containerWidth: 1000 })
+      const rightmost = Math.max(...result.items.map((item) => item.x + item.w))
+      expect(rightmost).toBeCloseTo(1000, 1)
+      expect(result.width).toBeCloseTo(1000, 1)
+    })
+
+    it('fits whole columns inside the container', () => {
+      // floor((1000 + 8) / (200 + 8)) = 4 columns, each widened to fill.
       const { items } = computeLayout(Array.from({ length: 9 }, (_, i) => photo(`p${i}`, 1, 1)), {
         mode: 'square',
         containerWidth: 1000
       })
-      const distinctX = new Set(items.map((item) => item.x))
-      expect(distinctX.size).toBe(4)
+      expect(new Set(items.map((item) => item.x)).size).toBe(4)
     })
 
     it('uses at least one column for a very narrow container', () => {

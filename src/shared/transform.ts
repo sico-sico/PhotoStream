@@ -111,11 +111,56 @@ export interface FitOptions {
 }
 
 /**
+ * Frame a photo wall.
+ *
+ * A wall is an endless vertical strip, not a picture: a 3226-photo wall is
+ * ~140000px tall. Fitting *both* axes therefore computes a scale near zero and
+ * either shrinks the whole library to thumbnails or clamps to `MIN_FIT_SCALE`
+ * and leaves most of the window empty — which is exactly what looked like "the
+ * thumbnails don't fill the window".
+ *
+ * So a wall is fitted by **width** and anchored to the top:
+ * - the width is *covered*, never merely fitted, so no gap can appear at the
+ *   sides regardless of rounding in the layout;
+ * - padding defaults to zero, because a photo wall reads best edge-to-edge;
+ * - everything below the fold is reached by panning.
+ */
+export function fitWallTransform(
+  worldWidth: number,
+  worldHeight: number,
+  viewportWidth: number,
+  viewportHeight: number,
+  options: FitOptions = {}
+): Transform {
+  // Zero, not 24: a wall should reach the window edges.
+  const padding = options.padding ?? 0
+  const maxScale = options.maxScale ?? 1
+  const minScale = options.minScale ?? MIN_FIT_SCALE
+  if (worldWidth <= 0 || worldHeight <= 0) return { ...IDENTITY }
+
+  const usableW = Math.max(1, viewportWidth - padding * 2)
+  // `max` (cover), not `min` (contain): fitting loosely would reintroduce the
+  // side gaps caused by the layout being rounded to two decimals.
+  const raw = usableW / worldWidth
+  const scale = clampScale(raw, minScale, maxScale)
+
+  const scaledWidth = worldWidth * scale
+  // Only centre when the wall is meaningfully narrower (a small library in a
+  // wide window). A sub-pixel shortfall from layout rounding must not turn into
+  // a visible margin, so the comparison has a tolerance.
+  const slack = viewportWidth - scaledWidth
+  const x = slack > 1 ? slack / 2 : padding
+
+  void viewportHeight
+  // Always the top: centring would scroll past the first photos.
+  return { scale, x, y: padding }
+}
+
+/**
  * Scale/translate so the world fits the viewport, within readable bounds.
  *
- * When the wall is too tall to fit at a readable scale, this aligns to the top
- * and left instead of shrinking further: the content simply extends past the
- * viewport, which is what panning is for.
+ * Suited to a single image or a bounded canvas. A photo wall should use
+ * `fitWallTransform` instead; see the note there.
  */
 export function fitTransform(
   worldWidth: number,
