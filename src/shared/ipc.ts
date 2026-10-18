@@ -7,8 +7,14 @@ export const IPC = {
   settingsLoad: 'settings:load',
   settingsSave: 'settings:save',
   thumbUrl: 'thumb:url',
+  thumbUrls: 'thumb:urls',
+  thumbReady: 'thumb:ready',
   thumbProgress: 'thumb:progress',
-  revealInFolder: 'shell:reveal'
+  revealInFolder: 'shell:reveal',
+  windowMinimize: 'window:minimize',
+  windowToggleMaximize: 'window:toggleMaximize',
+  windowClose: 'window:close',
+  windowState: 'window:state'
 } as const
 
 /** Custom protocol used to stream cached thumbnails and originals to the renderer. */

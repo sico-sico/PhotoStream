@@ -1,26 +1,46 @@
 import type { ThumbLevel } from './types'
 
-export const THUMB_SIZES: Record<ThumbLevel, number> = {
+/**
+ * Cached rendition sizes in pixels (long edge).
+ *
+ * `full` is absent on purpose: it is the original file, never generated and
+ * never cached.
+ */
+export const THUMB_SIZES: Record<Exclude<ThumbLevel, 'full'>, number> = {
   wall: 512,
   zoom: 1280
 }
 
 /**
- * Choose the smallest cached rendition that still has enough pixels for the
- * on-screen size. `worldPixels` is the item's width in world units, so the
- * device pixel ratio has to be folded in before comparing.
+ * Base tile width in world pixels, used to size the on-screen demand.
  *
- * Zoomed-in tiles use the sharper level; everything else stays on the wall
- * level, which is what keeps the on-disk cache small.
+ * Kept here rather than passed in so the LOD decision stays a pure function of
+ * the zoom level; the value matches `LAYOUT_DEFAULTS` for the common modes.
+ */
+export const REFERENCE_TILE = 240
+
+/**
+ * Choose the best rendition for the current zoom.
+ *
+ * The previous version capped out at the 1280px level, so anything past
+ * `scale ≈ 2.4` was upscaled and visibly blurry. Serving the original beyond
+ * that point costs one decode but keeps the wall sharp at any magnification.
  */
 export function pickThumbLevel(worldPixels: number, scale: number, devicePixelRatio = 1): ThumbLevel {
   const needed = Math.abs(worldPixels * scale * devicePixelRatio)
   if (!Number.isFinite(needed)) return 'wall'
-  return needed > THUMB_SIZES.wall * 0.9 ? 'zoom' : 'wall'
+  if (needed > THUMB_SIZES.zoom * 0.9) return 'full'
+  if (needed > THUMB_SIZES.wall * 0.9) return 'zoom'
+  return 'wall'
 }
 
 /** Cache directory key for a photo rendition. Stable across runs and machines. */
-export function thumbKey(path: string, mtimeMs: number, sizeBytes: number, level: ThumbLevel): string {
+export function thumbKey(
+  path: string,
+  mtimeMs: number,
+  sizeBytes: number,
+  level: Exclude<ThumbLevel, 'full'>
+): string {
   return `${hash64(`${path}|${mtimeMs}|${sizeBytes}|${level}`)}-${level}.webp`
 }
 

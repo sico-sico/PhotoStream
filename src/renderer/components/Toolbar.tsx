@@ -2,12 +2,12 @@ import type { LayoutMode } from '@shared/types'
 import type { MessageKey } from '@shared/i18n/messages'
 import { useI18n } from '../i18n/context'
 import { LanguagePicker } from './LanguagePicker'
+import { WindowControls } from './WindowControls'
 
 export interface ToolbarProps {
   dir: string
   layout: LayoutMode
   filtersOpen: boolean
-  progress: { done: number; total: number } | null
   busy: boolean
   visibleCount: number
   totalCount: number
@@ -26,7 +26,6 @@ export function Toolbar({
   dir,
   layout,
   filtersOpen,
-  progress,
   busy,
   visibleCount,
   totalCount,
@@ -70,18 +69,21 @@ export function Toolbar({
         {t('toolbar.filters')}
       </button>
 
+      {/**
+       * The only counter in the UI.
+       *
+       * Thumbnail generation is now demand-driven (only what is on screen), so
+       * a second `x/y` progress figure had no meaningful total and read as a
+       * duplicate of this one.
+       */}
       <div className="toolbar-stats">
-        <span>
+        <span className="photo-count" title={t('toolbar.photoCount', { visible: visibleCount, total: totalCount })}>
           {visibleCount}/{totalCount}
         </span>
-        {progress && progress.total > 0 ? (
-          <span className="progress" title={t('toolbar.thumbsTitle')}>
-            {progress.done}/{progress.total}
-          </span>
-        ) : null}
       </div>
 
       <LanguagePicker />
+      <WindowControls />
     </header>
   )
 }

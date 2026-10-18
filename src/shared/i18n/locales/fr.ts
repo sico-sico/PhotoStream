@@ -18,7 +18,7 @@ export const fr: Catalog = {
   'toolbar.layoutSquare': 'Carré',
   'toolbar.layoutSquareHint': 'Grille carrée uniforme',
   'toolbar.filters': 'Filtres',
-  'toolbar.thumbsTitle': 'Miniatures',
+  'toolbar.photoCount': '{visible} sur {total} photos',
   'toolbar.language': 'Langue',
 
   'filters.aria': 'Filtres',
@@ -42,5 +42,10 @@ export const fr: Catalog = {
   'viewer.noDate': 'aucune date de prise de vue',
   'viewer.size': '{width}×{height}',
 
-  'dialog.chooseFolder': 'Choisir un dossier de photos'
+  'dialog.chooseFolder': 'Choisir un dossier de photos',
+
+  'window.minimize': 'Réduire',
+  'window.maximize': 'Agrandir',
+  'window.restore': 'Restaurer',
+  'window.close': 'Fermer'
 }

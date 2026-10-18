@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   IDENTITY,
   MAX_SCALE,
+  MIN_FIT_SCALE,
   MIN_SCALE,
   clampScale,
   fitTransform,
@@ -172,9 +173,33 @@ describe('fitTransform', () => {
     expect(fitTransform(-5, 100, 800, 600)).toEqual(IDENTITY)
   })
 
+  it('keeps a huge wall readable instead of shrinking to nothing', () => {
+    // A 3226-photo wall is ~64000px tall. Fitting it entirely into 800px gave
+    // scale 0.05, which pinned the view to the minimum: every tile was 16px and
+    // the wheel appeared dead.
+    const transform = fitTransform(7600, 64000, 1600, 1000)
+    expect(transform.scale).toBeGreaterThanOrEqual(MIN_FIT_SCALE)
+    expect(transform.scale).toBe(MIN_FIT_SCALE)
+    // Too tall to fit, so it starts at the top-left rather than being centred
+    // in a space that does not exist.
+    expect(transform.x).toBe(24)
+    expect(transform.y).toBe(24)
+  })
+
+  it('still centres a wall that does fit', () => {
+    const transform = fitTransform(800, 400, 1600, 1000, { padding: 0 })
+    expect(transform.scale).toBe(1)
+    expect(transform.x).toBeCloseTo((1600 - 800) / 2, 6)
+  })
+
+  it('honours a custom minimum fit scale', () => {
+    const transform = fitTransform(10000, 10000, 1600, 1000, { minScale: 0.4 })
+    expect(transform.scale).toBe(0.4)
+  })
+
   it('handles a viewport smaller than the padding', () => {
     const t = fitTransform(1000, 1000, 10, 10, { padding: 50 })
-    expect(t.scale).toBe(MIN_SCALE)
+    expect(t.scale).toBe(MIN_FIT_SCALE)
     expect(Number.isFinite(t.x)).toBe(true)
   })
 })

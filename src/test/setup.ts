@@ -17,6 +17,34 @@ afterEach(() => {
 const hasDom = typeof window !== 'undefined' && typeof document !== 'undefined'
 
 if (hasDom) {
+  // The preload bridge only exists inside Electron. Components that render
+  // window controls call it on mount, so a minimal stub keeps component tests
+  // focused on behaviour instead of failing on a missing global.
+  if (!('photoStream' in window)) {
+    Object.defineProperty(window, 'photoStream', {
+      // Configurable so individual tests can install their own fake bridge.
+      configurable: true,
+      writable: true,
+      value: {
+        appInfo: async () => ({ version: '0.0.0', dataDir: '', thumbCacheDir: '', systemLocales: [] }),
+        pickDirectory: async () => null,
+        openDirectory: async () => ({ dir: '', photos: [], skipped: 0, durationMs: 0 }),
+        loadSettings: async () => ({ lastDir: '', layout: 'grid', filters: { from: '', to: '', text: '' }, locale: '' }),
+        saveSettings: async (settings: unknown) => settings,
+        thumbUrl: async () => '',
+        thumbUrls: async () => [],
+        revealInFolder: async () => {},
+        minimize: async () => {},
+        toggleMaximize: async () => false,
+        close: async () => {},
+        isMaximized: async () => false,
+        onWindowState: () => () => {},
+        onPhotosChanged: () => () => {},
+        onThumbProgress: () => () => {}
+      }
+    })
+  }
+
   // jsdom implements neither of these, and both are used by the wall.
   if (!('ResizeObserver' in globalThis)) {
     class ResizeObserverStub {

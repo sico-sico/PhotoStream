@@ -17,7 +17,17 @@ export interface Transform {
 }
 
 export const MIN_SCALE = 0.05
-export const MAX_SCALE = 8
+export const MAX_SCALE = 12
+
+/**
+ * Smallest scale an automatic fit is allowed to use.
+ *
+ * Fitting a very tall wall (thousands of photos) into one window produced a
+ * scale of 0.05, which pinned the view to `MIN_SCALE`: every tile was 16px and
+ * the wheel appeared to do nothing. A fit never goes below this, so a large
+ * library opens at a readable size and the user pans instead of squinting.
+ */
+export const MIN_FIT_SCALE = 0.22
 
 export const IDENTITY: Transform = { scale: 1, x: 0, y: 0 }
 
@@ -95,10 +105,18 @@ export interface FitOptions {
   padding?: number
   /** Never scale above this, so a one-photo wall does not fill the screen. */
   maxScale?: number
+  /** Never scale below this, so a huge wall stays readable. Defaults to `MIN_FIT_SCALE`. */
+  minScale?: number
   center?: boolean
 }
 
-/** Scale/translate so the whole world fits inside the viewport. */
+/**
+ * Scale/translate so the world fits the viewport, within readable bounds.
+ *
+ * When the wall is too tall to fit at a readable scale, this aligns to the top
+ * and left instead of shrinking further: the content simply extends past the
+ * viewport, which is what panning is for.
+ */
 export function fitTransform(
   worldWidth: number,
   worldHeight: number,
@@ -108,12 +126,18 @@ export function fitTransform(
 ): Transform {
   const padding = options.padding ?? 24
   const maxScale = options.maxScale ?? 1
+  const minScale = options.minScale ?? MIN_FIT_SCALE
   const usableW = Math.max(1, viewportWidth - padding * 2)
   const usableH = Math.max(1, viewportHeight - padding * 2)
   if (worldWidth <= 0 || worldHeight <= 0) return { ...IDENTITY }
 
-  const scale = clampScale(Math.min(usableW / worldWidth, usableH / worldHeight, maxScale))
-  if (options.center === false) return { scale, x: padding, y: padding }
+  const raw = Math.min(usableW / worldWidth, usableH / worldHeight, maxScale)
+  const scale = clampScale(Math.max(raw, minScale), minScale, maxScale)
+
+  if (options.center === false || raw < minScale) {
+    // Too large to fit legibly: start at the top-left corner.
+    return { scale, x: padding, y: padding }
+  }
 
   return {
     scale,

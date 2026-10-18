@@ -16,8 +16,28 @@ describe('pickThumbLevel', () => {
     expect(pickThumbLevel(threshold + 1, 1)).toBe('zoom')
   })
 
+  it('serves the original once the zoom level runs out of pixels', () => {
+    // This is the fix for blurry tiles: the old code capped out at the 1280px
+    // rendition and upscaled beyond it.
+    const threshold = THUMB_SIZES.zoom * 0.9
+    expect(pickThumbLevel(threshold, 1)).toBe('zoom')
+    expect(pickThumbLevel(threshold + 1, 1)).toBe('full')
+  })
+
+  it('reaches the original at a realistic tile size and zoom', () => {
+    // A 240px tile at 3x on a 1x display needs 720px... but at 6x it needs
+    // 1440px, past the 1280px rendition.
+    expect(pickThumbLevel(240, 3)).toBe('zoom')
+    expect(pickThumbLevel(240, 6)).toBe('full')
+  })
+
+  it('reaches the original sooner on a high-DPI display', () => {
+    expect(pickThumbLevel(240, 3, 1)).toBe('zoom')
+    expect(pickThumbLevel(240, 3, 2)).toBe('full')
+  })
+
   it('accounts for the device pixel ratio', () => {
-    // 240 * 1 * 2 = 480 < 460.8? No: 480 > 460.8, so a retina display promotes.
+    // 240 * 1 * 2 = 480 > 460.8, so a retina display promotes the rendition.
     expect(pickThumbLevel(240, 1, 1)).toBe('wall')
     expect(pickThumbLevel(240, 1, 2)).toBe('zoom')
   })

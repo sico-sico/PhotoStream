@@ -27,7 +27,7 @@ export const en = {
   'toolbar.layoutSquare': 'Square',
   'toolbar.layoutSquareHint': 'Uniform square grid',
   'toolbar.filters': 'Filters',
-  'toolbar.thumbsTitle': 'Thumbnails',
+  'toolbar.photoCount': '{visible} of {total} photos',
   'toolbar.language': 'Language',
 
   'filters.aria': 'Filters',
@@ -51,7 +51,12 @@ export const en = {
   'viewer.noDate': 'no capture date',
   'viewer.size': '{width}×{height}',
 
-  'dialog.chooseFolder': 'Choose photo folder'
+  'dialog.chooseFolder': 'Choose photo folder',
+
+  'window.minimize': 'Minimize',
+  'window.maximize': 'Maximize',
+  'window.restore': 'Restore',
+  'window.close': 'Close'
 } as const
 
 /** Every message the UI can ask for. */

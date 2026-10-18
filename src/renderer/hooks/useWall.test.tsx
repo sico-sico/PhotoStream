@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, renderHook, waitFor } from '@testing-library/react'
-import type { Photo, Settings } from '@shared/types'
+import type { Photo, Settings, ThumbLevel } from '@shared/types'
 import { DEFAULT_SETTINGS } from '@shared/types'
 import { useWall } from './useWall'
 
@@ -32,8 +32,15 @@ interface FakeApi {
   openDirectory: ReturnType<typeof vi.fn>
   pickDirectory: ReturnType<typeof vi.fn>
   thumbUrl: ReturnType<typeof vi.fn>
+  requestThumbs: ReturnType<typeof vi.fn>
+  onThumbReady: ReturnType<typeof vi.fn>
   revealInFolder: ReturnType<typeof vi.fn>
   appInfo: ReturnType<typeof vi.fn>
+  minimize: ReturnType<typeof vi.fn>
+  toggleMaximize: ReturnType<typeof vi.fn>
+  close: ReturnType<typeof vi.fn>
+  isMaximized: ReturnType<typeof vi.fn>
+  onWindowState: ReturnType<typeof vi.fn>
   onPhotosChanged: ReturnType<typeof vi.fn>
   onThumbProgress: ReturnType<typeof vi.fn>
 }
@@ -41,10 +48,16 @@ interface FakeApi {
 let api: FakeApi
 let photoListener: ((payload: unknown) => void) | null
 let progressListener: ((payload: { done: number; total: number }) => void) | null
+/** Push a finished rendition into the hook, as the main process would. */
+let emitThumbReady: (entry: [string, string, ThumbLevel]) => void = () => {}
+/** Renditions produced before the hook subscribed; replayed on subscribe. */
+let readyQueue: Array<[string, string, ThumbLevel]> = []
 
 function installApi(settings: Partial<Settings> = {}): void {
   photoListener = null
   progressListener = null
+  readyQueue = []
+  emitThumbReady = (entry) => readyQueue.push(entry)
 
   api = {
     loadSettings: vi.fn().mockResolvedValue({ ...DEFAULT_SETTINGS, ...settings }),
@@ -52,7 +65,26 @@ function installApi(settings: Partial<Settings> = {}): void {
     openDirectory: vi.fn().mockResolvedValue({ dir: '/photos', photos: [], skipped: 0, durationMs: 1 }),
     pickDirectory: vi.fn().mockResolvedValue('/photos'),
     thumbUrl: vi.fn().mockImplementation(async (p: Photo, level: string) => `pic://thumb/${p.id}-${level}.webp`),
+    // Streams results back through `onThumbReady`, exactly like the real bridge.
+    requestThumbs: vi.fn().mockImplementation(async (photos: Photo[], level: ThumbLevel) => {
+      for (const p of photos) emitThumbReady([p.id, `pic://thumb/${p.id}-${level}.webp`, level])
+    }),
+    onThumbReady: vi.fn().mockImplementation((listener: (entry: [string, string, ThumbLevel]) => void) => {
+      // Replay anything that finished before this subscription existed.
+      const backlog = readyQueue
+      readyQueue = []
+      emitThumbReady = listener
+      for (const entry of backlog) listener(entry)
+      return () => {
+        emitThumbReady = () => {}
+      }
+    }),
     revealInFolder: vi.fn(),
+    minimize: vi.fn().mockResolvedValue(undefined),
+    toggleMaximize: vi.fn().mockResolvedValue(false),
+    close: vi.fn().mockResolvedValue(undefined),
+    isMaximized: vi.fn().mockResolvedValue(false),
+    onWindowState: vi.fn().mockReturnValue(() => {}),
     appInfo: vi.fn().mockResolvedValue({ version: '0', dataDir: '', thumbCacheDir: '', systemLocales: [] }),
     onPhotosChanged: vi.fn().mockImplementation((listener: (payload: unknown) => void) => {
       photoListener = listener
@@ -253,7 +285,7 @@ describe('useWall', () => {
   })
 
   describe('thumbnails', () => {
-    it('requests thumbnail URLs for visible photos', async () => {
+    it('requests thumbnails for visible photos in one batch', async () => {
       api.openDirectory.mockResolvedValue({ dir: '/photos', photos: [photo('a')], skipped: 0, durationMs: 1 })
 
       const { result } = renderHook(() => useWall(viewport))
@@ -262,11 +294,36 @@ describe('useWall', () => {
       })
 
       await waitFor(() => expect(result.current.thumbUrls.a).toContain('pic://thumb/'))
-      expect(api.thumbUrl).toHaveBeenCalledWith(expect.objectContaining({ id: 'a' }), expect.any(String))
+      // One round-trip per pass, not one per photo.
+      expect(api.requestThumbs).toHaveBeenCalledTimes(1)
+      expect(api.requestThumbs).toHaveBeenCalledWith(
+        [expect.objectContaining({ id: 'a' })],
+        expect.any(String)
+      )
     })
 
-    it('keeps the wall usable when a thumbnail request fails', async () => {
-      api.thumbUrl.mockRejectedValue(new Error('encode failed'))
+    it('only asks for photos inside the viewport', async () => {
+      // Photos are laid out vertically; a viewport-sized window can only reach
+      // the first few. Requesting all of them is what made large folders slow.
+      const many = Array.from({ length: 400 }, (_, i) => photo(`p${i}`, '2020-01-01', `${i}.jpg`))
+      api.openDirectory.mockResolvedValue({ dir: '/photos', photos: many, skipped: 0, durationMs: 1 })
+      api.requestThumbs.mockResolvedValue(undefined)
+
+      const { result } = renderHook(() => useWall({ width: 1200, height: 800 }))
+      await act(async () => {
+        await result.current.chooseFolder()
+      })
+
+      await waitFor(() => expect(api.requestThumbs).toHaveBeenCalled())
+      const requested = api.requestThumbs.mock.calls.flatMap(([photos]) => photos as Photo[])
+      expect(requested.length).toBeGreaterThan(0)
+      expect(requested.length).toBeLessThan(many.length)
+    })
+
+    it('does not let a slow lower-quality result overwrite a sharper one', async () => {
+      // Zoom in, then in again: the `wall` encode may finish after `full`.
+      // Accepting it would visibly blur a tile that was already sharp.
+      installApi()
       api.openDirectory.mockResolvedValue({ dir: '/photos', photos: [photo('a')], skipped: 0, durationMs: 1 })
 
       const { result } = renderHook(() => useWall(viewport))
@@ -274,7 +331,48 @@ describe('useWall', () => {
         await result.current.chooseFolder()
       })
 
-      await waitFor(() => expect(api.thumbUrl).toHaveBeenCalled())
+      await act(async () => {
+        emitThumbReady(['a', 'pic://photo/a.jpg', 'full'])
+      })
+      expect(result.current.thumbUrls.a).toBe('pic://photo/a.jpg')
+
+      await act(async () => {
+        emitThumbReady(['a', 'pic://thumb/a-wall.webp', 'wall'])
+      })
+      // Still the sharp one.
+      expect(result.current.thumbUrls.a).toBe('pic://photo/a.jpg')
+    })
+
+    it('accepts a sharper result that arrives after a blurry one', async () => {
+      installApi()
+      api.openDirectory.mockResolvedValue({ dir: '/photos', photos: [photo('a')], skipped: 0, durationMs: 1 })
+
+      const { result } = renderHook(() => useWall(viewport))
+      await act(async () => {
+        await result.current.chooseFolder()
+      })
+
+      await act(async () => {
+        emitThumbReady(['a', 'pic://thumb/a-wall.webp', 'wall'])
+      })
+      expect(result.current.thumbUrls.a).toBe('pic://thumb/a-wall.webp')
+
+      await act(async () => {
+        emitThumbReady(['a', 'pic://photo/a.jpg', 'full'])
+      })
+      expect(result.current.thumbUrls.a).toBe('pic://photo/a.jpg')
+    })
+
+    it('keeps the wall usable when a thumbnail request fails', async () => {
+      api.requestThumbs.mockRejectedValue(new Error('encode failed'))
+      api.openDirectory.mockResolvedValue({ dir: '/photos', photos: [photo('a')], skipped: 0, durationMs: 1 })
+
+      const { result } = renderHook(() => useWall(viewport))
+      await act(async () => {
+        await result.current.chooseFolder()
+      })
+
+      await waitFor(() => expect(api.requestThumbs).toHaveBeenCalled())
       // No URL, but the tile stays and the photo is still visible.
       expect(result.current.thumbUrls.a).toBeUndefined()
       expect(result.current.visiblePhotos).toHaveLength(1)

@@ -178,18 +178,49 @@ describe('PhotoLibrary', () => {
     })
   })
 
-  it('reports thumbnail progress while warming the cache', async () => {
+  it('does not warm thumbnails on open', async () => {
+    // Generating renditions for the whole folder made large libraries take
+    // minutes before the wall felt usable. Opening must only scan and watch.
+    const photos = Array.from({ length: 6 }, (_, i) => `photo${i}.jpg`)
+    for (const name of photos) await writeJpeg(name, '2020:01:01 10:00:00')
+
+    await library.open(photoDir)
+    await library.drain()
+
+    expect(notices.some((notice) => notice.channel === IPC.thumbProgress)).toBe(false)
+  })
+
+  it('reports progress when thumbnails are warmed explicitly', async () => {
     await writeJpeg('a.jpg', '2020:01:01 10:00:00')
     await library.open(photoDir)
 
-    const started = Date.now()
-    while (!notices.some((notice) => notice.channel === IPC.thumbProgress)) {
-      if (Date.now() - started > 5000) throw new Error('no progress reported')
-      await new Promise((resolve) => setTimeout(resolve, 25))
-    }
+    library.warmThumbnails(library.all, 'wall')
+    await library.drain()
 
-    const progress = notices.find((notice) => notice.channel === IPC.thumbProgress)!.payload
-    expect(progress).toMatchObject({ total: 1 })
+    const progress = notices.filter((notice) => notice.channel === IPC.thumbProgress)
+    expect(progress.length).toBeGreaterThan(0)
+    expect(progress.at(-1)?.payload).toEqual({ done: 1, total: 1 })
+  })
+
+  it('never generates anything for the full level', async () => {
+    await writeJpeg('a.jpg', '2020:01:01 10:00:00')
+    await library.open(photoDir)
+
+    library.warmThumbnails(library.all, 'full')
+    await library.drain()
+
+    expect(notices.some((notice) => notice.channel === IPC.thumbProgress)).toBe(false)
+  })
+
+  it('serves the original file for the full level', async () => {
+    await writeJpeg('a.jpg', '2020:01:01 10:00:00')
+    await library.open(photoDir)
+
+    // No encode, no cache entry: the original is streamed instead, which is
+    // what keeps the wall sharp at high zoom.
+    const url = await library.thumbUrlFor(library.all[0], 'full')
+    expect(url.startsWith('pic://photo/')).toBe(true)
+    expect(url).toContain('a.jpg')
   })
 
   it('does nothing when closed before ever opening', () => {

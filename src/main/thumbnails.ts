@@ -38,7 +38,8 @@ export interface ThumbRequest {
   sourcePath: string
   mtimeMs: number
   sizeBytes: number
-  level: ThumbLevel
+  /** Only the cached levels are ever generated; `full` streams the original. */
+  level: Exclude<ThumbLevel, 'full'>
 }
 
 export function thumbPath(cacheDir: string, request: ThumbRequest): string {
@@ -66,6 +67,35 @@ async function exists(path: string): Promise<boolean> {
 const inFlight = new Map<string, Promise<string>>()
 
 /**
+ * Global cap on concurrent encodes.
+ *
+ * The renderer asks for a screenful at a time, which can be hundreds of photos.
+ * Starting them all at once floods the disk queue and libvips, and the first
+ * visible thumbnail ends up stuck behind all of them — measured at ~15 s for the
+ * first tile of a 3226-photo library. Four matches the throughput sweet spot
+ * from the benchmark while keeping latency low for the tiles the user is
+ * actually looking at.
+ */
+const MAX_CONCURRENT_ENCODES = 4
+let activeEncodes = 0
+const waiting: Array<() => void> = []
+
+async function acquire(): Promise<void> {
+  if (activeEncodes < MAX_CONCURRENT_ENCODES) {
+    activeEncodes += 1
+    return
+  }
+  await new Promise<void>((resolve) => waiting.push(resolve))
+  activeEncodes += 1
+}
+
+function release(): void {
+  activeEncodes -= 1
+  const next = waiting.shift()
+  if (next) next()
+}
+
+/**
  * Ensure a thumbnail exists on disk and return its path.
  * Writes to a temporary name first so a crash mid-encode cannot leave a
  * half-written file that later looks like a cache hit.
@@ -77,11 +107,20 @@ export async function ensureThumbnail(cacheDir: string, request: ThumbRequest): 
   const pending = inFlight.get(target)
   if (pending) return pending
 
-  const job = buildThumbnail(target, request).finally(() => {
+  const job = encodeWithLimit(target, request).finally(() => {
     inFlight.delete(target)
   })
   inFlight.set(target, job)
   return job
+}
+
+async function encodeWithLimit(target: string, request: ThumbRequest): Promise<string> {
+  await acquire()
+  try {
+    return await buildThumbnail(target, request)
+  } finally {
+    release()
+  }
 }
 
 async function buildThumbnail(target: string, request: ThumbRequest): Promise<string> {

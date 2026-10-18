@@ -100,7 +100,6 @@ function AppView({
         dir={wall.state.dir}
         layout={wall.state.layout}
         filtersOpen={filtersOpen}
-        progress={wall.progress}
         busy={wall.busy}
         visibleCount={wall.visiblePhotos.length}
         totalCount={wall.state.photos.length}

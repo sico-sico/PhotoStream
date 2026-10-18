@@ -18,7 +18,7 @@ export const zhCN: Catalog = {
   'toolbar.layoutSquare': '正方形',
   'toolbar.layoutSquareHint': '统一的正方形网格',
   'toolbar.filters': '筛选',
-  'toolbar.thumbsTitle': '缩略图',
+  'toolbar.photoCount': '{visible} / {total} 张',
   'toolbar.language': '语言',
 
   'filters.aria': '筛选',
@@ -42,5 +42,10 @@ export const zhCN: Catalog = {
   'viewer.noDate': '无拍摄日期',
   'viewer.size': '{width}×{height}',
 
-  'dialog.chooseFolder': '选择照片文件夹'
+  'dialog.chooseFolder': '选择照片文件夹',
+
+  'window.minimize': '最小化',
+  'window.maximize': '最大化',
+  'window.restore': '还原',
+  'window.close': '关闭'
 }

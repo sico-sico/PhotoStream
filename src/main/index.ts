@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, Menu, shell } from 'electron'
 import { join } from 'node:path'
 import { IPC } from '../shared/ipc'
 import { PhotoLibrary, registerIpc } from './ipc'
@@ -29,6 +29,11 @@ async function createWindow(dataDir: string, thumbCacheDir: string): Promise<voi
     show: false,
     backgroundColor: '#101014',
     title: 'PhotoStream',
+    // The default title bar only repeated the app name and the default menu was
+    // a stock Electron template with no commands behind it. Both are removed;
+    // the renderer draws its own controls and can drag the window via CSS.
+    frame: false,
+    autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       // Security baseline: the renderer never gets Node, and only the
@@ -38,6 +43,10 @@ async function createWindow(dataDir: string, thumbCacheDir: string): Promise<voi
       sandbox: false
     }
   })
+
+  // A frameless window on Windows has no system menu; removing it also stops
+  // Alt from revealing an empty menu bar.
+  Menu.setApplicationMenu(null)
 
   mainWindow.once('ready-to-show', () => mainWindow?.show())
 

@@ -1,4 +1,4 @@
-import { ipcMain, dialog, shell } from 'electron'
+import { ipcMain, dialog, shell, BrowserWindow } from 'electron'
 import { stat } from 'node:fs/promises'
 import { basename } from 'node:path'
 import type { AppInfo, Photo, Settings, ThumbLevel } from '../shared/types'
@@ -7,7 +7,7 @@ import { scanDirectory } from './scanner'
 import { ensureThumbnail, ensureThumbnails, type ThumbRequest } from './thumbnails'
 import { loadSettings, saveSettings } from './settings-store'
 import { watchDirectory, type DirectoryWatcher, type RawWatchEvent } from './watcher'
-import { thumbUrl } from './protocol'
+import { thumbUrl, photoUrl } from './protocol'
 import { findPhoto, removePhoto, sortPhotos, upsertPhoto } from '../shared/photoStore'
 import { readImageMetadata } from './metadata'
 import { locales } from '../shared/i18n'
@@ -42,7 +42,10 @@ export class PhotoLibrary {
     this.photos = result.photos
     this.dir = result.dir
     this.watcher = this.startWatching(result.dir)
-    this.warmThumbnails(result.photos, 'wall')
+    // No eager warm-up here. Generating renditions for every file made a large
+    // folder take minutes before the wall felt usable, and most of those
+    // thumbnails were never looked at. The renderer asks for what is on screen
+    // instead, so work scales with what the user actually sees.
     return { dir: result.dir, photos: result.photos, skipped: result.skipped, durationMs: result.durationMs }
   }
 
@@ -137,8 +140,14 @@ export class PhotoLibrary {
     })
   }
 
-  /** Generate thumbnails in the background, reporting progress. */
+  /**
+   * Generate thumbnails in the background, reporting progress.
+   *
+   * Only meaningful for the cached levels; `full` is the original file and has
+   * nothing to generate.
+   */
   warmThumbnails(photos: readonly Photo[], level: ThumbLevel): void {
+    if (level === 'full') return
     const requests = photos.map((photo) => toThumbRequest(photo, level))
     this.thumbQueue = this.thumbQueue.then(() =>
       ensureThumbnails(this.thumbCacheDir, requests, {
@@ -147,14 +156,20 @@ export class PhotoLibrary {
     )
   }
 
-  /** Resolve the cached URL for one photo at one level, generating it on demand. */
+  /**
+   * Resolve the URL for one photo at one level.
+   *
+   * `full` bypasses the cache entirely and streams the original, which is what
+   * keeps the wall sharp at high zoom.
+   */
   async thumbUrlFor(photo: Photo, level: ThumbLevel): Promise<string> {
+    if (level === 'full') return photoUrl(basename(photo.path))
     const file = await ensureThumbnail(this.thumbCacheDir, toThumbRequest(photo, level))
     return thumbUrl(basename(file))
   }
 }
 
-function toThumbRequest(photo: Photo, level: ThumbLevel): ThumbRequest {
+function toThumbRequest(photo: Photo, level: Exclude<ThumbLevel, 'full'>): ThumbRequest {
   return {
     sourcePath: photo.path,
     mtimeMs: photo.mtimeMs,
@@ -197,5 +212,49 @@ export function registerIpc(deps: IpcDeps): void {
   ipcMain.handle(IPC.settingsLoad, () => loadSettings(deps.dataDir))
   ipcMain.handle(IPC.settingsSave, (_event, settings: Settings) => saveSettings(deps.dataDir, settings))
   ipcMain.handle(IPC.thumbUrl, (_event, photo: Photo, level: ThumbLevel) => deps.library.thumbUrlFor(photo, level))
+
+  // Resolve a batch of renditions, streaming each result back as it finishes.
+  //
+  // Waiting for the whole batch meant the first visible tiles were blocked
+  // behind every other tile in the request. Pushing each one immediately lets
+  // the wall fill in progressively. The level travels with the result so a slow
+  // low-quality encode cannot overwrite a sharper one that already arrived.
+  ipcMain.handle(IPC.thumbUrls, async (event, photos: Photo[], level: ThumbLevel): Promise<void> => {
+    const sender = event.sender
+    await Promise.all(
+      photos.map(async (photo) => {
+        try {
+          const url = await deps.library.thumbUrlFor(photo, level)
+          if (!sender.isDestroyed()) sender.send(IPC.thumbReady, [photo.id, url, level] as [string, string, ThumbLevel])
+        } catch {
+          // A single unreadable photo must not fail the whole batch; the tile
+          // simply stays on its placeholder.
+        }
+      })
+    )
+  })
   ipcMain.handle(IPC.revealInFolder, (_event, path: string) => shell.showItemInFolder(path))
+
+  // Window controls for the custom title bar. Each one resolves the sender's
+  // window rather than trusting a window id from the renderer.
+  const windowOf = (event: { sender: Electron.WebContents }): Electron.BrowserWindow | null =>
+    BrowserWindow.fromWebContents(event.sender)
+
+  ipcMain.handle(IPC.windowMinimize, (event) => {
+    windowOf(event)?.minimize()
+  })
+
+  ipcMain.handle(IPC.windowToggleMaximize, (event): boolean => {
+    const window = windowOf(event)
+    if (!window) return false
+    if (window.isMaximized()) window.unmaximize()
+    else window.maximize()
+    return window.isMaximized()
+  })
+
+  ipcMain.handle(IPC.windowClose, (event) => {
+    windowOf(event)?.close()
+  })
+
+  ipcMain.handle(IPC.windowState, (event): boolean => windowOf(event)?.isMaximized() ?? false)
 }

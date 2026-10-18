@@ -56,7 +56,13 @@ export const DEFAULT_SETTINGS: Settings = {
   locale: ''
 }
 
-export type ThumbLevel = 'wall' | 'zoom'
+/**
+ * Which rendition of a photo to show.
+ *
+ * `wall` and `zoom` are cached WebP thumbnails; `full` streams the original
+ * file, which is the only way to stay sharp at high magnification.
+ */
+export type ThumbLevel = 'wall' | 'zoom' | 'full'
 
 export interface ThumbRequest {
   path: string

@@ -12,7 +12,6 @@ function renderToolbar(props: Partial<React.ComponentProps<typeof Toolbar>> = {}
         dir="/photos"
         layout="grid"
         filtersOpen={false}
-        progress={null}
         busy={false}
         visibleCount={10}
         totalCount={20}
@@ -43,30 +42,30 @@ describe('Toolbar', () => {
 
   it('reports the visible and total counts', () => {
     renderToolbar()
+    // The number itself is compact; the surrounding counters are labelled so
+    // two `x/y` values can never look like a duplicated indicator.
     expect(screen.getByText('10/20')).toBeInTheDocument()
   })
 
-  it('shows progress only when there is work', () => {
-    const { rerender } = renderToolbar({ progress: null })
-    expect(screen.queryByTitle('Thumbnails')).toBeNull()
+  it('labels the thumbnail counter so it is not confused with the photo count', () => {
+    // The thumbnail counter was removed entirely: generation is demand-driven
+    // now, so its total was meaningless and it read as a duplicate.
+    renderToolbar()
+    const counters = document.querySelectorAll('.toolbar-stats > *')
+    expect(counters).toHaveLength(1)
+    expect(counters[0].textContent).toBe('10/20')
+  })
 
-    rerender(
-      <I18nProvider preference="en" systemLocales={[]} onLocaleChange={() => {}}>
-        <Toolbar
-          dir="/photos"
-          layout="grid"
-          filtersOpen={false}
-          progress={{ done: 3, total: 9 }}
-          busy={false}
-          visibleCount={9}
-          totalCount={9}
-          onChooseFolder={() => {}}
-          onLayoutChange={() => {}}
-          onToggleFilters={() => {}}
-        />
-      </I18nProvider>
-    )
-    expect(screen.getByTitle('Thumbnails')).toHaveTextContent('3/9')
+  it('renders the window controls', () => {
+    renderToolbar()
+    expect(screen.getByRole('button', { name: 'Minimize' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Maximize' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument()
+  })
+
+  it('shows no progress counter', () => {
+    renderToolbar()
+    expect(screen.queryByTitle('Thumbnails')).toBeNull()
   })
 
   it('marks the active layout', () => {

@@ -3,9 +3,12 @@ import type { Filters, LayoutMode, Photo, Settings, ThumbLevel } from '@shared/t
 import { DEFAULT_SETTINGS } from '@shared/types'
 import { applyFilters } from '@shared/filters'
 import { computeLayout } from '@shared/layout'
-import { pickThumbLevel } from '@shared/thumbs'
+import { pickThumbLevel, REFERENCE_TILE } from '@shared/thumbs'
 import { fitTransform, type Transform } from '@shared/transform'
 import { INITIAL_STATE, reducer } from '../state/wallReducer'
+
+/** Quality order, used to reject results that would downgrade a tile. */
+const LEVEL_RANK: Record<ThumbLevel, number> = { wall: 0, zoom: 1, full: 2 }
 
 /**
  * Wires the renderer to the main process and derives everything the wall needs.
@@ -41,6 +44,14 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
   const [transform, setTransform] = useState<Transform>({ scale: 1, x: 0, y: 0 })
   const [thumbUrls, setThumbUrls] = useState<Record<string, string>>({})
   const requested = useRef(new Set<string>())
+  /**
+   * Level currently displayed per photo.
+   *
+   * Requesting a higher level while lower encodes are still running is normal
+   * (zoom in, then in again). Those slower results must not overwrite a sharper
+   * one that already arrived, or the wall visibly degrades as you zoom.
+   */
+  const shownLevel = useRef(new Map<string, ThumbLevel>())
   // Set once the stored settings have been applied. Guards the persist effect
   // below so mount-time defaults never overwrite the user's file.
   const hydratedRef = useRef(false)
@@ -61,7 +72,35 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
     [visiblePhotos, state.layout, viewport.width]
   )
 
-  const thumbLevel = useMemo(() => pickThumbLevel(300, transform.scale, window.devicePixelRatio || 1), [transform.scale])
+  const thumbLevel = useMemo(
+    () => pickThumbLevel(REFERENCE_TILE, transform.scale, window.devicePixelRatio || 1),
+    [transform.scale]
+  )
+
+  /**
+   * Ids of tiles currently inside the viewport, plus a small margin.
+   *
+   * Thumbnails are only requested for these. Asking for every photo in the
+   * folder was the reason a large library took minutes to become usable: the
+   * main process encoded thousands of renditions the user never scrolled to.
+   * The margin pre-fetches one screen in each direction so ordinary panning
+   * does not show empty tiles.
+   */
+  const visibleIds = useMemo(() => {
+    const margin = Math.max(viewport.width, viewport.height)
+    const left = (-transform.x - margin) / transform.scale
+    const top = (-transform.y - margin) / transform.scale
+    const right = (viewport.width - transform.x + margin) / transform.scale
+    const bottom = (viewport.height - transform.y + margin) / transform.scale
+
+    const ids = new Set<string>()
+    for (const item of layout.items) {
+      if (item.x + item.w < left || item.x > right) continue
+      if (item.y + item.h < top || item.y > bottom) continue
+      ids.add(item.id)
+    }
+    return ids
+  }, [layout.items, transform.x, transform.y, transform.scale, viewport.width, viewport.height])
 
   const openPhoto = useMemo(
     () => state.photos.find((photo) => photo.id === state.selectedId) ?? null,
@@ -144,6 +183,7 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
     dispatch({ type: 'scan/start', dir })
     setThumbUrls({})
     requested.current.clear()
+    shownLevel.current.clear()
     try {
       const result = await window.photoStream.openDirectory(dir)
       dispatch({ type: 'scan/success', dir: result.dir, photos: result.photos })
@@ -157,37 +197,30 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
     if (dir) await openDirectory(dir)
   }, [openDirectory])
 
-  // Fetch thumbnail URLs lazily, level by level, remembering what was asked for.
+  // Apply each rendition as it arrives, so the wall fills in progressively.
   useEffect(() => {
-    let cancelled = false
-    const pending = visiblePhotos.filter((photo) => !requested.current.has(`${photo.id}:${thumbLevel}`)).slice(0, 200)
+    return window.photoStream.onThumbReady(([id, url, level]) => {
+      const current = shownLevel.current.get(id)
+      // Never downgrade: a `wall` result arriving after `full` is stale.
+      if (current !== undefined && LEVEL_RANK[level] < LEVEL_RANK[current]) return
+      shownLevel.current.set(id, level)
+      setThumbUrls((previous) => (previous[id] === url ? previous : { ...previous, [id]: url }))
+    })
+  }, [])
+
+  // Ask for whatever is on screen that has not been requested yet.
+  useEffect(() => {
+    const pending = visiblePhotos
+      .filter((photo) => visibleIds.has(photo.id) && !requested.current.has(`${photo.id}:${thumbLevel}`))
+      .slice(0, 400)
     if (pending.length === 0) return
 
-    void (async () => {
-      const entries: Array<[string, string]> = []
-      for (const photo of pending) {
-        if (cancelled) return
-        requested.current.add(`${photo.id}:${thumbLevel}`)
-        try {
-          entries.push([photo.id, await window.photoStream.thumbUrl(photo, thumbLevel)])
-        } catch {
-          // Leave the tile on its placeholder; a later pass can retry.
-          requested.current.delete(`${photo.id}:${thumbLevel}`)
-        }
-      }
-      if (!cancelled && entries.length > 0) {
-        setThumbUrls((previous) => {
-          const next = { ...previous }
-          for (const [id, url] of entries) next[id] = url
-          return next
-        })
-      }
-    })()
-
-    return () => {
-      cancelled = true
-    }
-  }, [visiblePhotos, thumbLevel])
+    for (const photo of pending) requested.current.add(`${photo.id}:${thumbLevel}`)
+    void window.photoStream.requestThumbs(pending, thumbLevel).catch(() => {
+      // Allow a later pass to retry if the IPC itself failed.
+      for (const photo of pending) requested.current.delete(`${photo.id}:${thumbLevel}`)
+    })
+  }, [visiblePhotos, visibleIds, thumbLevel])
 
   const fitToView = useCallback(
     (size: { width: number; height: number }) => {
