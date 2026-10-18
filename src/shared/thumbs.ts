@@ -5,10 +5,19 @@ import type { ThumbLevel } from './types'
  *
  * `full` is absent on purpose: it is the original file, never generated and
  * never cached.
+ *
+ * `zoom` was 1280 and is now 2560. At 1280 the wall jumped straight from a
+ * 1280px WebP to the original JPEG, and a camera file is often 6000–8000px —
+ * six times the pixels of the rendition it replaced. Rapid zooming therefore
+ * decoded a handful of multi-megapixel originals per gesture, which is what
+ * made the wall stutter. 2560 covers the magnifications people actually use for
+ * a wall (the tiles are 240 world px, so a 2560px rendition holds up to about
+ * 10× scale at 1:1 on a 1× display) and pushes the original back to the case
+ * where someone is genuinely inspecting one photo.
  */
 export const THUMB_SIZES: Record<Exclude<ThumbLevel, 'full'>, number> = {
   wall: 512,
-  zoom: 1280
+  zoom: 2560
 }
 
 /**

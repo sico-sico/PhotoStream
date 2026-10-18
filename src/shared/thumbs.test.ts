@@ -24,16 +24,22 @@ describe('pickThumbLevel', () => {
     expect(pickThumbLevel(threshold + 1, 1)).toBe('full')
   })
 
-  it('reaches the original at a realistic tile size and zoom', () => {
-    // A 240px tile at 3x on a 1x display needs 720px... but at 6x it needs
-    // 1440px, past the 1280px rendition.
+  it('reaches the original only when the zoom genuinely runs out of pixels', () => {
+    // A 240px tile needs 240*scale*dpr pixels. With a 2560px `zoom` rendition
+    // the original is not needed until scale ≈ 9.6 — the point of the larger
+    // tier: a camera JPEG is often 6000–8000px, six times the pixels of the
+    // rendition it replaces, and decoding several of those per gesture is what
+    // made rapid zooming stutter.
     expect(pickThumbLevel(240, 3)).toBe('zoom')
-    expect(pickThumbLevel(240, 6)).toBe('full')
+    expect(pickThumbLevel(240, 9)).toBe('zoom')
+    expect(pickThumbLevel(240, 10)).toBe('full')
   })
 
   it('reaches the original sooner on a high-DPI display', () => {
-    expect(pickThumbLevel(240, 3, 1)).toBe('zoom')
-    expect(pickThumbLevel(240, 3, 2)).toBe('full')
+    // A 2x display needs twice the pixels, so it crosses into the original at
+    // half the zoom.
+    expect(pickThumbLevel(240, 5, 1)).toBe('zoom')
+    expect(pickThumbLevel(240, 5, 2)).toBe('full')
   })
 
   it('accounts for the device pixel ratio', () => {

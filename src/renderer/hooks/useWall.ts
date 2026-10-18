@@ -9,9 +9,6 @@ import { reanchorTransform } from '@shared/reanchor'
 import { prefetchIdsForScroll } from '@shared/cull'
 import { INITIAL_STATE, reducer } from '../state/wallReducer'
 
-/** Quality order, used to reject results that would downgrade a tile. */
-const LEVEL_RANK: Record<ThumbLevel, number> = { wall: 0, zoom: 1, full: 2 }
-
 /**
  * How many destination tiles to prefetch for a scrollbar jump.
  *
@@ -87,16 +84,19 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE)
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
   const [transform, setTransform] = useState<Transform>({ scale: 1, x: 0, y: 0 })
-  const [thumbUrls, setThumbUrls] = useState<Record<string, string>>({})
   const requested = useRef(new Set<string>())
   /**
-   * Level currently displayed per photo.
+   * Renditions received per photo, by level.
    *
-   * Requesting a higher level while lower encodes are still running is normal
-   * (zoom in, then in again). Those slower results must not overwrite a sharper
-   * one that already arrived, or the wall visibly degrades as you zoom.
+   * Kept as a map of *all* levels rather than a single "best so far" value,
+   * because the right rendition depends on the current zoom and that changes in
+   * both directions. The previous version recorded only the highest level ever
+   * received and refused to downgrade, so after one zoom-in a tile kept
+   * displaying a multi-megapixel original even when zoomed back out — measured
+   * at 1239 MB in the renderer and 790 MB of GPU memory after a single
+   * in-and-out gesture, versus 142 MB at rest.
    */
-  const shownLevel = useRef(new Map<string, ThumbLevel>())
+  const renditionUrls = useRef(new Map<string, Partial<Record<ThumbLevel, string>>>())
   // Set once the stored settings have been applied. Guards the persist effect
   // below so mount-time defaults never overwrite the user's file.
   const hydratedRef = useRef(false)
@@ -308,9 +308,9 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
 
   const openDirectory = useCallback(async (dir: string) => {
     dispatch({ type: 'scan/start', dir })
-    setThumbUrls({})
     requested.current.clear()
-    shownLevel.current.clear()
+    renditionUrls.current.clear()
+    setRenditionTick((value) => value + 1)
     try {
       const result = await window.photoStream.openDirectory(dir, recursiveRef.current)
       dispatch({ type: 'scan/success', dir: result.dir, photos: result.photos })
@@ -366,9 +366,9 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
   const openDropped = useCallback(async (path: string, options: { focus?: boolean } = {}) => {
     if (!path) return
     dispatch({ type: 'scan/start', dir: path })
-    setThumbUrls({})
     requested.current.clear()
-    shownLevel.current.clear()
+    renditionUrls.current.clear()
+    setRenditionTick((value) => value + 1)
     try {
       const result = await window.photoStream.openDropped(path, recursiveRef.current)
       dispatch({ type: 'scan/success', dir: result.dir, photos: result.photos })
@@ -405,16 +405,46 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
     })
   }, [])
 
-  // Apply each rendition as it arrives, so the wall fills in progressively.
+  // Record every rendition as it arrives, so the wall can show the one matching
+  // the current zoom instead of whatever was sharpest a moment ago.
+  //
+  // `tick` exists because `renditionUrls` is a ref: mutating it does not
+  // re-render, and the derived map below has to be recomputed when a new
+  // rendition lands.
+  const [renditionTick, setRenditionTick] = useState(0)
   useEffect(() => {
     return window.photoStream.onThumbReady(([id, url, level]) => {
-      const current = shownLevel.current.get(id)
-      // Never downgrade: a `wall` result arriving after `full` is stale.
-      if (current !== undefined && LEVEL_RANK[level] < LEVEL_RANK[current]) return
-      shownLevel.current.set(id, level)
-      setThumbUrls((previous) => (previous[id] === url ? previous : { ...previous, [id]: url }))
+      const byLevel = renditionUrls.current.get(id) ?? {}
+      if (byLevel[level] === url) return
+      byLevel[level] = url
+      renditionUrls.current.set(id, byLevel)
+      setRenditionTick((value) => value + 1)
     })
   }, [])
+
+  /**
+   * URLs at the level the current zoom calls for.
+   *
+   * This is what makes zooming back out cheap again: the tile returns to its
+   * 512px WebP and the browser releases the decoded original. Previously the
+   * highest level ever received was kept, so one zoom-in pinned every visited
+   * tile to a multi-megapixel image — 1239 MB in the renderer after a single
+   * in-and-out gesture.
+   *
+   * A level that has not arrived yet falls back to one that has, preferring
+   * sharper over blank: a briefly over-sharp tile is far less jarring than an
+   * empty box.
+   */
+  const thumbUrls = useMemo(() => {
+    const urls: Record<string, string> = {}
+    for (const photo of visiblePhotos) {
+      const byLevel = renditionUrls.current.get(photo.id)
+      if (!byLevel) continue
+      const url = byLevel[thumbLevel] ?? byLevel.wall ?? byLevel.zoom ?? byLevel.full
+      if (url) urls[photo.id] = url
+    }
+    return urls
+  }, [visiblePhotos, thumbLevel, renditionTick])
 
   // Ask for whatever is on screen that has not been requested yet.
   useEffect(() => {

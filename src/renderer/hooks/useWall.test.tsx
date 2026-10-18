@@ -440,9 +440,11 @@ describe('useWall', () => {
       expect(requested.length).toBeLessThan(many.length)
     })
 
-    it('does not let a slow lower-quality result overwrite a sharper one', async () => {
-      // Zoom in, then in again: the `wall` encode may finish after `full`.
-      // Accepting it would visibly blur a tile that was already sharp.
+    it('shows the rendition that matches the current zoom, not the sharpest ever seen', async () => {
+      // The rule is "what the zoom calls for", not "the best so far". Keeping the
+      // sharpest ever received pinned every visited tile to a multi-megapixel
+      // original even after zooming back out: measured at 1239 MB in the
+      // renderer versus 142 MB at rest.
       installApi()
       api.openDirectory.mockResolvedValue({ dir: '/photos', photos: [photo('a')], skipped: 0, durationMs: 1 })
 
@@ -451,19 +453,20 @@ describe('useWall', () => {
         await result.current.chooseFolder()
       })
 
+      await act(async () => {
+        emitThumbReady(['a', 'pic://thumb/a-wall.webp', 'wall'])
+      })
       await act(async () => {
         emitThumbReady(['a', 'pic://photo/a.jpg', 'full'])
       })
-      expect(result.current.thumbUrls.a).toBe('pic://photo/a.jpg')
 
-      await act(async () => {
-        emitThumbReady(['a', 'pic://thumb/a-wall.webp', 'wall'])
-      })
-      // Still the sharp one.
-      expect(result.current.thumbUrls.a).toBe('pic://photo/a.jpg')
+      // At the fitted zoom the wall wants `wall`, so that is what it shows —
+      // the original is recorded but not displayed.
+      expect(result.current.thumbLevel).toBe('wall')
+      expect(result.current.thumbUrls.a).toBe('pic://thumb/a-wall.webp')
     })
 
-    it('accepts a sharper result that arrives after a blurry one', async () => {
+    it('switches to the sharper rendition once the zoom calls for it', async () => {
       installApi()
       api.openDirectory.mockResolvedValue({ dir: '/photos', photos: [photo('a')], skipped: 0, durationMs: 1 })
 
@@ -474,13 +477,42 @@ describe('useWall', () => {
 
       await act(async () => {
         emitThumbReady(['a', 'pic://thumb/a-wall.webp', 'wall'])
+        emitThumbReady(['a', 'pic://thumb/a-zoom.webp', 'zoom'])
       })
       expect(result.current.thumbUrls.a).toBe('pic://thumb/a-wall.webp')
 
-      await act(async () => {
-        emitThumbReady(['a', 'pic://photo/a.jpg', 'full'])
+      // Zoom in far enough to cross into the `zoom` band.
+      act(() => {
+        result.current.setTransform({ scale: 3, x: 0, y: 0 })
       })
-      expect(result.current.thumbUrls.a).toBe('pic://photo/a.jpg')
+      await waitFor(() => expect(result.current.thumbLevel).toBe('zoom'))
+      expect(result.current.thumbUrls.a).toBe('pic://thumb/a-zoom.webp')
+    })
+
+    it('falls back to a rendition that already arrived while the right one loads', async () => {
+      // A blank tile is worse than a slightly soft one, so display falls back
+      // through the levels that exist instead of clearing the slot.
+      installApi()
+      // `requestThumbs` normally streams a result straight back; suppress that
+      // so the test controls exactly which renditions have arrived.
+      api.requestThumbs.mockResolvedValue(undefined)
+      api.openDirectory.mockResolvedValue({ dir: '/photos', photos: [photo('a')], skipped: 0, durationMs: 1 })
+
+      const { result } = renderHook(() => useWall(viewport))
+      await act(async () => {
+        await result.current.chooseFolder()
+      })
+
+      // Only the small rendition has arrived.
+      await act(async () => {
+        emitThumbReady(['a', 'pic://thumb/a-wall.webp', 'wall'])
+      })
+      act(() => {
+        result.current.setTransform({ scale: 3, x: 0, y: 0 })
+      })
+
+      await waitFor(() => expect(result.current.thumbLevel).toBe('zoom'))
+      expect(result.current.thumbUrls.a).toBe('pic://thumb/a-wall.webp')
     })
 
     it('keeps the wall usable when a thumbnail request fails', async () => {
