@@ -322,6 +322,15 @@ describe('RandomShow', () => {
    * neither can be tested by waiting.
    */
   describe('on turnover', () => {
+    /**
+     * A ring smaller than the pool.
+     *
+     * With the default ring of 70 and the 30-photo fixture the pool is fully
+     * covered, so turn-overs are skipped by design (see `turnoverAddsPhotos`) and
+     * nothing would ever fall.
+     */
+    const TURNOVER_RING = 12
+
     /** Advance the show's clock past the batch interval and let effects settle. */
     async function turnover(): Promise<void> {
       await act(async () => {
@@ -333,7 +342,7 @@ describe('RandomShow', () => {
     it('renders the outgoing ring as falling cards', async () => {
       vi.useFakeTimers()
       vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
-      renderShow()
+      renderShow({ ringSize: TURNOVER_RING })
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0)
       })
@@ -354,7 +363,7 @@ describe('RandomShow', () => {
       // clickable while they pass over it.
       vi.useFakeTimers()
       vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
-      renderShow()
+      renderShow({ ringSize: TURNOVER_RING })
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0)
       })
@@ -364,12 +373,31 @@ describe('RandomShow', () => {
       }
     })
 
+    it('does not drop the ring when the pool cannot fill it', async () => {
+      // 30 photos under the default ring of 70: every photo is already a
+      // candidate, so a turnover would only drop the screen and deal the same
+      // set back. Promotions keep the show moving instead.
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+      renderShow()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      const ringBefore = screen.getAllByTestId('random-thumb').length
+      expect(ringBefore).toBeGreaterThan(0)
+
+      await turnover()
+
+      expect(screen.queryAllByTestId('random-falling')).toHaveLength(0)
+      expect(screen.getAllByTestId('random-thumb').length).toBe(ringBefore)
+    })
+
     it('removes the fallen cards once they are out of sight', async () => {
       // Otherwise every turnover would leave a hidden pile of decoded images
       // behind — with a 90-photo ring that is most of the show's memory.
       vi.useFakeTimers()
       vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
-      renderShow()
+      renderShow({ ringSize: TURNOVER_RING })
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0)
       })

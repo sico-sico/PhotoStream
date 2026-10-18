@@ -168,6 +168,99 @@ describe('advance', () => {
     expect(state.surrounding.every((p) => tiny.some((t) => t.id === p.id))).toBe(true)
   })
 
+  describe('a pool too small to turn over', () => {
+    /**
+     * Ring size at or above the library size means the ring already holds
+     * everything the pool can offer, so a turnover can only reshuffle what is on
+     * screen — and it used to *shrink* it, because the turnover excluded the
+     * current screen from its draw. Measured at the default ring of 70: 30 photos
+     * went 29 -> 28 -> 1 -> 28 -> 1, once a minute.
+     */
+    it('does not turn the batch over when the ring covers the library', () => {
+      const small = Array.from({ length: 30 }, (_, i) => photo(i))
+      let state = started(3, small)
+      const before = state.surrounding.length
+      const batchesBefore = state.ringChanges
+      const lastBatchAt = state.lastBatchAt
+
+      // Two full turnover intervals, sampled on the tick itself. A promotion is
+      // still allowed — that is the whole point of skipping the turnover.
+      state = advance(state, { now: 1000 + 60000, photoMs: 8000, batchMs: 60000 })
+      expect(state.ringChanges).toBe(batchesBefore)
+      expect(state.lastBatchAt).toBe(lastBatchAt)
+      // Nothing falls: a drop animation for a batch that is not changing would
+      // read as a rendering fault.
+      expect(state.falling).toHaveLength(0)
+      expect(state.surrounding.length).toBe(before)
+      // And the ring turned over by exactly one tile, not re-dealt wholesale.
+      expect(new Set(state.surrounding.map((p) => p.id)).size).toBe(before)
+    })
+
+    it('keeps the ring full instead of collapsing on a turnover', () => {
+      // Only one photo more than the ring: excluding the screen leaves nothing,
+      // so the top-up pass is what keeps the ring at its natural size.
+      const pool = Array.from({ length: 21 }, (_, i) => photo(i))
+      let state = showReducer(INITIAL_SHOW_STATE, {
+        type: 'show/start',
+        pool,
+        viewport: VIEWPORT,
+        seed: 7,
+        ringSize: 20,
+        now: 1000
+      })
+      const before = state.surrounding.length
+      expect(before).toBeGreaterThan(15)
+
+      state = advance(state, { now: 1000 + 60000, photoMs: 8000, batchMs: 60000, ringSize: 20 })
+      expect(state.surrounding.length).toBe(before)
+      expect(state.falling.length).toBe(before)
+    })
+
+    it('still brings in the photos that were left out of the layout', () => {
+      // At equality the scatter may have dropped candidates, so a turnover is
+      // worth doing even though the ring covers the whole library.
+      const pool = Array.from({ length: 20 }, (_, i) => photo(i))
+      let state = showReducer(INITIAL_SHOW_STATE, {
+        type: 'show/start',
+        pool,
+        viewport: VIEWPORT,
+        seed: 11,
+        ringSize: 20,
+        now: 1000
+      })
+      state = advance(state, { now: 1000 + 60000, photoMs: 8000, batchMs: 60000, ringSize: 20 })
+      const onScreen = new Set([state.centre!.id, ...state.surrounding.map((p) => p.id)])
+      expect(onScreen.size).toBeGreaterThanOrEqual(19)
+    })
+
+    it('never shows the same photo twice at once', () => {
+      // The two-pass draw makes a repeat more likely, since the second pass
+      // deliberately revisits photos that are already on screen.
+      const tiny = [photo(0), photo(1), photo(2)]
+      let state = started(5, tiny)
+      for (let t = 1000; t <= 1000 + 300000; t += 1000) {
+        state = advance(state, { now: t, photoMs: 8000, batchMs: 60000 })
+        const ids = [state.centre?.id, ...state.surrounding.map((p) => p.id)].filter(Boolean) as string[]
+        expect(new Set(ids).size).toBe(ids.length)
+      }
+    })
+
+    it('keeps rotating so the show never freezes', () => {
+      // The retired centre is readmitted when there is nothing else to draw. The
+      // alternative — leaving the tile empty — left a three-photo library with a
+      // single photo and no way back, because turn-overs are skipped here.
+      const tiny = [photo(0), photo(1), photo(2)]
+      let state = started(5, tiny)
+      const centres = new Set<string>()
+      for (let t = 1000; t <= 1000 + 120000; t += 1000) {
+        state = advance(state, { now: t, photoMs: 8000, batchMs: 60000 })
+        if (state.centre) centres.add(state.centre.id)
+      }
+      expect(centres.size).toBe(3)
+      expect(state.surrounding.length).toBe(2)
+    })
+  })
+
   it('replaces a different tile every time, not the same tile over and over', () => {
     // The ring is a queue: index 0 is the photo that has been on screen longest.
     // Refilling a promoted slot *in place* put the replacement at index 0 of the

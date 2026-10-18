@@ -1344,48 +1344,92 @@ test('applies the ring-size preference and keeps it across a restart', async () 
  * batch actually falls out of the window is to watch it travel and then vanish.
  */
 test('drops the outgoing batch out of the bottom of the window', async () => {
-  await openLibrary()
-  await useEnglish()
-  await page.getByRole('button', { name: 'Random show' }).click()
-  await expect(page.getByTestId('random-centre')).toBeVisible()
-  await expect(page.getByTestId('random-thumb').first()).toBeVisible()
+  /*
+   * A dedicated folder, because a turnover only happens when the ring is
+   * smaller than the library: with the shared 15-photo fixture every photo is
+   * already a candidate, so the batch is left alone by design.
+   */
+  const poolDir = await mkdtemp(join(tmpdir(), 'photostream-e2e-drop-'))
+  for (let index = 0; index < 80; index += 1) {
+    const day = String((index % 28) + 1).padStart(2, '0')
+    await writeJpeg(poolDir, `2021-06-${day} Drop ${index}.jpg`, `2021:06:${day} 10:00:00`)
+  }
 
-  const ringCount = await page.getByTestId('random-thumb').count()
-  expect(ringCount).toBeGreaterThan(0)
+  try {
+    await app.evaluate(async ({ dialog }, dir) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [dir] })
+    }, poolDir)
+    await useEnglish()
+    const emptyAction = page.locator('.empty-state button.primary')
+    if ((await emptyAction.count()) > 0) await emptyAction.click()
+    else await page.locator('.toolbar-open-main').click()
+    await expect(page.locator('.dir-label')).toHaveText(poolDir)
 
-  // A turnover is a 60 s affair; waiting for it would make this test useless as a
-  // regression net. The component reads `Date.now()` on every tick, so shifting
-  // the clock forward is exactly what the next tick would have seen.
-  const falling = await page.evaluate(async () => {
-    const original = Date.now
-    Date.now = () => original() + 60_000
-    // One tick is 250 ms; give React a couple of frames to commit the new state.
-    await new Promise((resolve) => setTimeout(resolve, 400))
-    const cards = document.querySelectorAll('.random-show-falling').length
-    Date.now = original
-    return cards
-  })
-  expect(falling).toBe(ringCount)
+    /*
+     * Set the ring explicitly instead of relying on the default.
+     *
+     * The ring size is a persisted preference, and the test above leaves it at
+     * 90 — more than this folder holds, which now means "no turnover". Reading
+     * the setting from the environment would make this test depend on the order
+     * of the suite.
+     */
+    await page.locator('.menu-trigger').click()
+    await page.locator('.settings-menu input[type="range"]').fill('30')
+    await expect(page.locator('.settings-value')).toHaveText('30')
+    await page.keyboard.press('Escape')
 
-  // The cards exist and are positioned. Now confirm they are actually moving: a
-  // card that is present but never animated would still pass a DOM check.
-  const card = page.locator('.random-show-falling').first()
-  const start = await card.boundingBox()
-  expect(start).not.toBeNull()
-  // The animation runs 900 ms after at most ~170 ms of stagger.
-  await page.waitForTimeout(500)
-  const middle = await card.boundingBox()
-  expect(middle).not.toBeNull()
-  // It must have travelled downward, which is what the effect claims.
-  expect(middle!.y).toBeGreaterThan(start!.y)
+    await page.getByRole('button', { name: 'Random show' }).click()
+    await expect(page.getByTestId('random-centre')).toBeVisible()
+    await expect(page.getByTestId('random-thumb').first()).toBeVisible()
 
-  // And it must be gone once out of sight, or every turnover would leave a pile
-  // of decoded images behind.
-  await page.waitForTimeout(900)
-  await expect(page.locator('.random-show-falling')).toHaveCount(0)
+    const ringCount = await page.getByTestId('random-thumb').count()
+    expect(ringCount).toBeGreaterThan(0)
 
-  await page.keyboard.press('Escape')
-  await expect(page.locator('.random-show')).toHaveCount(0)
+    // A turnover is a 60 s affair; waiting for it would make this test useless as
+    // a regression net. The component reads `Date.now()` on every tick, so
+    // shifting the clock forward is exactly what the next tick would have seen.
+    const falling = await page.evaluate(async () => {
+      const original = Date.now
+      Date.now = () => original() + 60_000
+      // One tick is 250 ms; give React a couple of frames to commit the state.
+      await new Promise((resolve) => setTimeout(resolve, 400))
+      const cards = document.querySelectorAll('.random-show-falling').length
+      Date.now = original
+      return cards
+    })
+    expect(falling).toBe(ringCount)
+
+    // The cards exist and are positioned. Now confirm they are actually moving: a
+    // card that is present but never animated would still pass a DOM check.
+    const card = page.locator('.random-show-falling').first()
+    const start = await card.boundingBox()
+    expect(start).not.toBeNull()
+    // The animation runs 900 ms after at most ~170 ms of stagger.
+    await page.waitForTimeout(500)
+    const middle = await card.boundingBox()
+    expect(middle).not.toBeNull()
+    // It must have travelled downward, which is what the effect claims.
+    expect(middle!.y).toBeGreaterThan(start!.y)
+
+    // And it must be gone once out of sight, or every turnover would leave a pile
+    // of decoded images behind.
+    await page.waitForTimeout(900)
+    await expect(page.locator('.random-show-falling')).toHaveCount(0)
+
+    await page.keyboard.press('Escape')
+    await expect(page.locator('.random-show')).toHaveCount(0)
+  } finally {
+    /*
+     * The overlay has to be gone before the library is restored: an open
+     * `.random-show` covers the toolbar and consumes every pointer event, so a
+     * teardown that goes through the settings menu would time out and hide the
+     * real failure.
+     */
+    await page.keyboard.press('Escape').catch(() => undefined)
+    await expect(page.locator('.random-show')).toHaveCount(0)
+    await openLibrary()
+    await rm(poolDir, { recursive: true, force: true })
+  }
 })
 
 test('serves a sharp rendition at fit and the full original when zoomed, for a nested photo', async () => {

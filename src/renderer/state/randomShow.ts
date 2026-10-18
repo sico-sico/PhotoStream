@@ -182,21 +182,46 @@ export function isPaused(state: ShowState): boolean {
 /**
  * Build the ring around `centre`.
  *
- * @param exclude ids that must not appear — the centre itself, and on a turnover
- *   the photos that were just on screen
+ * Two passes, because "not on screen" is a preference rather than a requirement:
+ *
+ * 1. Draw from everything except `avoid` — normally the centre plus whatever is
+ *    on screen now, so a turnover shows something new.
+ * 2. Top up from the rest of the pool when the library is too small to fill the
+ *    ring that way.
+ *
+ * Without the second pass a small library lost most of its ring on every
+ * turnover. Measured at the default ring of 70: 30 photos went 29 -> 28 -> **1**
+ * -> 28 -> **1**, once a minute, because excluding a full screen from a pool of
+ * 30 left nothing to draw. Topping up keeps the ring at its natural size and
+ * simply repeats photos sooner, which is what a small library has to do.
+ *
+ * The centre is never repeated in the ring: it is the one photo that is
+ * unambiguously already visible.
+ *
+ * @param avoid ids to draw from last — the centre itself, and on a turnover the
+ *   photos that are on screen now
  */
 function layout(
   centre: Photo,
   pool: readonly Photo[],
   viewport: { width: number; height: number },
-  exclude: ReadonlySet<string>,
+  avoid: ReadonlySet<string>,
   rng: () => number,
   ringSize: number = RING_SIZE
 ): { surrounding: Photo[]; boxes: ScatterBox[]; centreBox: Box } {
-  const candidates = pickRandom(pool, ringSize, rng, exclude, (photo) => photo.id).map((photo) => ({
-    id: photo.id,
-    aspect: aspectOf(photo)
-  }))
+  const keyOf = (photo: Photo): string => photo.id
+  const fresh = pickRandom(pool, ringSize, rng, avoid, keyOf)
+
+  let chosen = fresh
+  if (fresh.length < ringSize) {
+    // Everything left is already on screen. Exclude only the centre, so the
+    // ring fills with photos that at least are not duplicated.
+    const taken = new Set<string>([centre.id, ...fresh.map(keyOf)])
+    const topUp = pickRandom(pool, ringSize - fresh.length, rng, taken, keyOf)
+    chosen = [...fresh, ...topUp]
+  }
+
+  const candidates = chosen.map((photo) => ({ id: photo.id, aspect: aspectOf(photo) }))
   const centreBox = centreBoxFor(aspectOf(centre), viewport, CENTRE_FRACTION)
   const boxes = scatterAround({ candidates, viewport, centre: centreBox, rng })
   const byId = new Map(pool.map((photo) => [photo.id, photo]))
@@ -207,6 +232,24 @@ function layout(
       .map((box) => byId.get(box.id))
       .filter((photo): photo is Photo => photo !== undefined)
   }
+}
+
+/**
+ * Whether a turnover would actually show the user something new.
+ *
+ * When the ring is as large as the library, every photo is already a candidate:
+ * the turnover can only reshuffle what is on screen, and it used to *shrink* it,
+ * because it excluded the current screen from its draw. Turning the batch over
+ * then costs a full drop animation and buys nothing, so it is skipped and the
+ * show keeps promoting instead — a continuous rotation, which is what a small
+ * library can offer.
+ *
+ * Strictly `ringSize > poolSize` rather than `>=`: at equality the scatter may
+ * still have dropped some candidates, so a turnover can genuinely reveal photos
+ * that did not fit the last layout.
+ */
+export function turnoverAddsPhotos(poolSize: number, ringSize: number): boolean {
+  return ringSize < poolSize
 }
 
 export function showReducer(state: ShowState, action: ShowAction): ShowState {
@@ -331,19 +374,26 @@ export function advance(state: ShowState, options: ShowOptions): ShowState {
   const { now, photoMs, batchMs } = options
   if (!state.centre || isPaused(state)) return state
 
-  if (now - state.lastBatchAt >= batchMs) {
+  const ringSize = options.ringSize ?? state.ringSize
+
+  /*
+   * A turnover is skipped when it could not show anything new.
+   *
+   * With a ring as large as the library every photo is already a candidate, so
+   * the only thing a turnover achieves is dropping the whole ring out of the
+   * window and dealing the same set back. Promotions keep running, so the show
+   * still changes: it rotates instead of reshuffling.
+   *
+   * `lastBatchAt` is deliberately left alone, so that adding photos to a small
+   * library lets the next tick turn the batch over normally.
+   */
+  const turnoverDue = now - state.lastBatchAt >= batchMs
+  if (turnoverDue && turnoverAddsPhotos(state.pool.length, ringSize)) {
     // The batch wins on a shared tick: promoting first would build a ring around
     // a centre photo that is about to be replaced.
     const exclude = new Set([state.centre.id, ...state.surrounding.map((photo) => photo.id)])
     const rng = mulberry32(state.seed + (state.ringChanges + 1) * 7919 + now)
-    const ring = layout(
-      state.centre,
-      state.pool,
-      state.viewport,
-      exclude,
-      rng,
-      options.ringSize ?? state.ringSize
-    )
+    const ring = layout(state.centre, state.pool, state.viewport, exclude, rng, ringSize)
 
     /*
      * The whole ring, not just the centre, leaves by falling out of the bottom.
@@ -390,11 +440,13 @@ export function advance(state: ShowState, options: ShowOptions): ShowState {
 /**
  * Promote `id` to the centre, replacing it in the ring with a fresh photo.
  *
- * The outgoing centre is *not* kept in the ring: it has had its turn, and leaving
- * it behind would slowly turn the screen into "everything I have already seen
- * today". Taking a new photo from the pool instead keeps the ring churning, which
- * is the point of a random show — every promotion shows something that was not on
- * screen a moment ago as well as something that was.
+ * The outgoing centre is *not* kept in the ring while there is anything else to
+ * draw: it has had its turn, and leaving it behind would slowly turn the screen
+ * into "everything I have already seen today". Taking a new photo from the pool
+ * instead keeps the ring churning, which is the point of a random show — every
+ * promotion shows something that was not on screen a moment ago as well as
+ * something that was. It is only readmitted when the library has nothing else
+ * left to offer; see the two draws below.
  *
  * The new photo takes the promoted photo's slot, so the layout does not reflow.
  */
@@ -404,15 +456,32 @@ export function focusPhoto(state: ShowState, id: string, now = state.lastPromoti
   if (!promoted) return state
 
   const outgoing = state.centre
-  const onScreen = new Set([outgoing.id, ...state.surrounding.map((photo) => photo.id)])
+  const keyOf = (photo: Photo): string => photo.id
+  const visible = new Set([outgoing.id, ...state.surrounding.map(keyOf)])
 
-  // Prefer something not already on screen. A large RING_SIZE can consume most of
-  // a small pool, so this legitimately runs dry; in that case the slot is simply
-  // left empty rather than refilled with a photo the user just finished looking
-  // at. Shrinking the ring by one is honest — the alternative is a screen that
-  // slowly refills with its own history.
+  /*
+   * Prefer something the user has not just been looking at.
+   *
+   * The first draw excludes everything on screen, which is what keeps the ring
+   * churning on a normal library: every promotion shows one photo that was not
+   * visible a moment ago.
+   *
+   * The second draw exists for the small library where that fails, and it is
+   * deliberately restricted to photos that will not be on screen after this
+   * promotion either: in practice the outgoing centre, which is leaving. Leaving
+   * the tile empty instead is fine for a single promotion, but not once
+   * turn-overs are skipped for a small pool: three photos would shrink to one
+   * and then freeze, because nothing would ever come back. Re-admitting the
+   * retired centre keeps a two-photo ring rotating forever, which is the honest
+   * thing for a library that size.
+   */
   const rng = mulberry32(state.seed + (state.promotions + 1) * 104729 + now)
-  const [replacement] = pickRandom(state.pool, 1, rng, onScreen, (photo) => photo.id)
+  let [replacement] = pickRandom(state.pool, 1, rng, visible, keyOf)
+  if (!replacement) {
+    const staying = new Set(state.surrounding.filter((photo) => photo.id !== id).map(keyOf))
+    staying.add(promoted.id)
+    ;[replacement] = pickRandom(state.pool, 1, rng, staying, keyOf)
+  }
 
   const surrounding = replacement
     ? [...state.surrounding.filter((photo) => photo.id !== id), replacement]
