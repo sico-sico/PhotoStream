@@ -418,6 +418,23 @@ thumbs/a/b/<16位hash>-viewer2048.webp
 
 `shared/wheel.ts` 把判断和位移量算成纯函数（`wheelIntent` / `wheelPan`），所以不用起 Electron 就能测。`deltaMode` 也在这里归一化——鼠标报像素、部分驱动报行/页。
 
+**每个滚轮刻度要有缓动。** 鼠标一格是 100–120 px，而事件本身是离散的：直接赋给 `transform` 会让墙面一次跳一整行，用户的原话是「没有动画效果滑动到目标位置，而是类似直接设定到某个值」。原生滚动对每一格都有缓动，我们照做：`.world.wheeling` 上挂 `transition: transform 0.1s linear`，类名在最后一次滚轮后保留 180 ms。
+
+实测一格 120 px 的绘制位置（每帧采样 `getComputedStyle` 的矩阵）：
+
+```
+修复前  0 → -120                     （一帧到位）
+修复后  0 → -20 → -40 → -60 → -80 → -100 → -120
+```
+
+三个不能省的细节：
+
+1. **只缓动「画」**。`transform` 状态仍然立即提交，所以裁剪集合和缩略图请求跟着真实目标走——这一点是上一版写反的（滚轮期间完全停止发请求），结果整段滚动 `thumbReady` 为 0、满屏空白，落地反而更慢。
+2. **线性、不用减速曲线**。`.settling` 的 `cubic-bezier` 每来一格就重起，会变成一顿一顿的脉冲；线性重起才是匀速滚动。时长也必须短（100 ms），否则连续滚动时墙面会明显追不上滚轮。
+3. **类名不能提前撤**。transition 是 100 ms，类名保留 180 ms；中途去掉 `transition` 会把剩余距离瞬间跳完，正好是这次要消除的跳格。
+
+拖动与 `Ctrl` + 滚轮缩放**不缓动**：前者的锚点是光标，后者要跟随指针，加了缓动只会让人手延迟。`Wall` 的 `wheeling` 与 `settling` 两个类因此分开，且 `.wheeling` 写在 `.settling` 之前，让程序化移动（键盘、滚动条）保留自己的 220 ms 曲线。
+
 单张查看页保持裸滚轮缩放：那里没有可滚动的内容，滚轮只有一个合理含义。
 
 ### 文件锁
@@ -440,9 +457,9 @@ Windows 编辑器（记事本、PowerShell）会在 UTF-8 文件前加 BOM，`JS
 
 ```bash
 npm run typecheck        # 同时检查 main/preload 与 renderer
-npm run test             # 1098 个单元/集成测试（59 个文件）
+npm run test             # 1102 个单元/集成测试（59 个文件）
 npm run test:coverage    # 覆盖率门槛：70%
-npm run test:e2e         # 37 个 Playwright 端到端测试
+npm run test:e2e         # 38 个 Playwright 端到端测试
 npm run verify           # 以上全部
 ```
 

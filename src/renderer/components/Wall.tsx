@@ -33,6 +33,15 @@ export interface WallProps {
    * so this is passed in per move rather than baked into the CSS.
    */
   animate?: boolean
+  /**
+   * Ease wheel-driven moves.
+   *
+   * Separate from `animate` because a wheel notch needs a much shorter, linear
+   * glide: one notch is ~120 px, and the 220 ms decelerating curve used for a
+   * whole-tile keyboard step would make a continuous scroll trail the wheel.
+   * The transform itself is still committed immediately; only the painting eases.
+   */
+  wheeling?: boolean
 }
 
 /** Imperative handle so a drag can move the wall without a React render. */
@@ -63,7 +72,7 @@ function worldTransform(t: Transform): string {
  */
 export const Wall = memo(
   forwardRef<WallHandle, WallProps>(function Wall(
-    { layout, photos, mounted, thumbUrls, transform, square, selectedId, handlers, animate = false },
+    { layout, photos, mounted, thumbUrls, transform, square, selectedId, handlers, animate = false, wheeling = false },
     ref
   ): React.JSX.Element {
     const { t } = useI18n()
@@ -90,7 +99,7 @@ export const Wall = memo(
     return (
       <div className="stage" data-testid="stage" role="application" aria-label={t('wall.aria')} {...handlers}>
         <div
-          className={`world ${animate ? 'settling' : ''}`}
+          className={`world ${wheeling ? 'wheeling' : ''} ${animate ? 'settling' : ''}`}
           data-testid="world"
           ref={worldRef}
           style={{

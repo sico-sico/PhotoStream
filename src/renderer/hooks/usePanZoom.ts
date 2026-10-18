@@ -27,6 +27,18 @@ export interface PanZoomOptions {
   onLiveTransform?: (transform: Transform) => void
   /** Latest committed transform, so a drag starts from the right place. */
   getTransform?: () => Transform
+  /**
+   * Called for every wheel event that pans (not zooms).
+   *
+   * A mouse wheel reports about 100-120 px per notch and arrives in discrete
+   * bursts, so applying each delta as an instant jump makes the wall teleport a
+   * row at a time instead of sliding. Chromium's own scrolling eases each notch,
+   * and this is the signal the wall uses to do the same.
+   *
+   * Zoom is excluded on purpose: the pointer is the anchor of that gesture, so
+   * easing it would trail the cursor.
+   */
+  onWheelPan?: () => void
 }
 
 /**
@@ -47,7 +59,7 @@ export interface PanZoomOptions {
  */
 export function usePanZoom(
   setTransform: (updater: (previous: Transform) => Transform) => void,
-  { wheelTarget, onItemClick, onBackgroundClick, onLiveTransform, getTransform }: PanZoomOptions
+  { wheelTarget, onItemClick, onBackgroundClick, onLiveTransform, getTransform, onWheelPan }: PanZoomOptions
 ): PanZoomHandlers {
   const drag = useRef<{
     start: GestureStart
@@ -154,11 +166,12 @@ export function usePanZoom(
       // Panning does not need the pointer position: a scroll moves everything by
       // the same amount.
       const { dx, dy } = wheelPan(wheel.deltaX, wheel.deltaY, wheel.deltaMode)
+      onWheelPan?.()
       setTransform((previous) => panBy(previous, dx, dy))
     }
     target.addEventListener('wheel', handler, { passive: false })
     return () => target.removeEventListener('wheel', handler)
-  }, [setTransform, wheelTarget])
+  }, [onWheelPan, setTransform, wheelTarget])
 
   return {
     onPointerDown,

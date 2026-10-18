@@ -344,6 +344,53 @@ test('zooms with the wheel and pans by dragging', async () => {
   expect(afterDrag).not.toBe(afterZoom)
 })
 
+test('eases each wheel notch instead of teleporting', async () => {
+  // A mouse wheel reports ~120 px per notch. Applying that as a single jump made
+  // the wall step a row at a time, which reads as "no animation, it just sets a
+  // value". Sample the *painted* transform across frames: an eased notch passes
+  // through several intermediate positions.
+  await useEnglish()
+  await page.getByRole('button', { name: 'Rows' }).click()
+  const world = page.locator('[data-testid="world"]')
+  await expect(page.locator('[data-photo-id]').first()).toBeVisible()
+
+  // Zoom in first: a fitted wall is smaller than the window, and the bounds then
+  // correctly refuse to move at all.
+  const stage = (await page.getByTestId('stage').boundingBox())!
+  await page.mouse.move(stage.x + stage.width / 2, stage.y + stage.height / 2)
+  for (let i = 0; i < 3; i += 1) await zoomWall(-400)
+  await page.waitForTimeout(700)
+
+  await page.evaluate(() => {
+    const element = document.querySelector('[data-testid="world"]') as HTMLElement
+    const samples: number[] = []
+    const classes: string[] = []
+    const started = performance.now()
+    ;(window as unknown as { __notch: { samples: number[]; classes: string[] } }).__notch = { samples, classes }
+    const tick = (): void => {
+      const matrix = new DOMMatrix(getComputedStyle(element).transform)
+      samples.push(Math.round(matrix.m42))
+      classes.push(element.className)
+      if (performance.now() - started < 600) requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+  })
+
+  await page.mouse.wheel(0, 120)
+  await page.waitForTimeout(800)
+
+  const notch = await page.evaluate(
+    () => (window as unknown as { __notch: { samples: number[]; classes: string[] } }).__notch
+  )
+
+  // More than a start and an end means it was interpolated, not assigned.
+  expect(new Set(notch.samples).size).toBeGreaterThan(2)
+  // The easing class only lasts for the gesture; a lingering one would make a
+  // later drag trail the cursor.
+  expect(notch.classes.some((name) => name.includes('wheeling'))).toBe(true)
+  expect(await world.evaluate((el: HTMLElement) => el.className)).not.toContain('wheeling')
+})
+
 test('pans the wall with the arrow keys', async () => {
   await useEnglish()
   // A zoomed-in view is required: with only three fixtures the fitted wall is

@@ -23,11 +23,13 @@ let commits = 0
 function Harness({
   onItemClick,
   onBackgroundClick,
-  wheelOn
+  wheelOn,
+  onWheelPan
 }: {
   onItemClick: (id: string) => void
   onBackgroundClick?: () => void
   wheelOn?: 'element' | 'window'
+  onWheelPan?: () => void
 }): React.JSX.Element {
   const ref = useRef<HTMLDivElement | null>(null)
   const setTransform = (updater: (previous: Transform) => Transform): void => {
@@ -39,7 +41,8 @@ function Harness({
     onBackgroundClick,
     wheelTarget: wheelOn === 'element' ? ref.current : null,
     onLiveTransform: (transform) => live.push(transform),
-    getTransform: () => latest
+    getTransform: () => latest,
+    onWheelPan
   })
 
   return (
@@ -314,6 +317,29 @@ describe('usePanZoom', () => {
       latest = { scale: 1, x: 0, y: 0 }
       window.dispatchEvent(new WheelEvent('wheel', { deltaY: 100, clientX: 900, clientY: 700, cancelable: true }))
       expect(latest).toEqual(fromTopLeft)
+    })
+
+    it('reports the gesture so the wall can ease the move', () => {
+      // A mouse wheel reports ~120 px per notch, so applying each one instantly
+      // teleports the wall a row at a time instead of sliding.
+      let pans = 0
+      render(<Harness onItemClick={() => {}} onWheelPan={() => (pans += 1)} />)
+
+      window.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, clientX: 300, clientY: 200, cancelable: true }))
+
+      expect(pans).toBe(1)
+    })
+
+    it('does not ease a zoom, which anchors on the pointer', () => {
+      // Easing a zoom would trail the cursor and feel broken rather than smooth.
+      let pans = 0
+      render(<Harness onItemClick={() => {}} onWheelPan={() => (pans += 1)} />)
+
+      window.dispatchEvent(
+        new WheelEvent('wheel', { deltaY: -200, ctrlKey: true, clientX: 300, clientY: 200, cancelable: true })
+      )
+
+      expect(pans).toBe(0)
     })
   })
 })

@@ -18,6 +18,15 @@ import type { Transform } from '@shared/transform'
 import { centerOn, isComfortablyVisible, isPanKey, neighbourInDirection, panByKey } from '@shared/keyboard'
 import type { AppInfo } from '@shared/types'
 
+/**
+ * How long a wheel-driven move keeps easing after the last notch.
+ *
+ * The transition itself is 100 ms. The extra 80 ms is slack: dropping the class
+ * while a transition is still running would snap the remaining distance in one
+ * step, which is the exact jump this is meant to remove.
+ */
+const WHEEL_SETTLE_MS = 180
+
 /** Measure an element's box, re-measuring on resize. */
 function useViewportSize(): { width: number; height: number; ref: React.RefObject<HTMLDivElement | null> } {
   const ref = useRef<HTMLDivElement | null>(null)
@@ -177,6 +186,34 @@ function AppView({
   }, [])
 
   /**
+   * Whether the wall should ease its next wheel-driven move.
+   *
+   * A mouse wheel reports ~100-120 px per notch, so each event used to teleport
+   * the wall a row at a time. Native scrolling eases every notch, and without
+   * that the motion reads as "jumping to a value" rather than scrolling.
+   *
+   * Only the *painting* is eased: the transform state is still committed
+   * immediately, so the cull and the thumbnail requests follow the real target
+   * and nothing is deferred to the end of the gesture.
+   */
+  const [wheeling, setWheeling] = useState(false)
+  const wheelTimer = useRef<number | null>(null)
+  const noteWheelPan = useCallback(() => {
+    setWheeling(true)
+    if (wheelTimer.current !== null) window.clearTimeout(wheelTimer.current)
+    // Outlasts the transition itself, so the class is never removed mid-flight
+    // (which would snap the remaining distance away).
+    wheelTimer.current = window.setTimeout(() => {
+      wheelTimer.current = null
+      setWheeling(false)
+    }, WHEEL_SETTLE_MS)
+  }, [])
+
+  useEffect(() => () => {
+    if (wheelTimer.current !== null) window.clearTimeout(wheelTimer.current)
+  }, [])
+
+  /**
    * Drop a folder anywhere on the window to browse it.
    *
    * Stable callbacks are essential here: the hook subscribes to window events,
@@ -190,10 +227,13 @@ function AppView({
   const handlers = usePanZoom(wall.setTransform, {
     onItemClick: (id) => wall.select(id),
     onBackgroundClick: () => setFiltersOpen(false),
+    // Ease each wheel notch instead of teleporting a row at a time.
+    onWheelPan: noteWheelPan,
     // Per-frame pan goes straight to the DOM; state is committed on release.
     onLiveTransform: (next) => {
       // Following the cursor exactly: no easing allowed mid-drag.
       setAnimate(false)
+      setWheeling(false)
       // Clamped here too, not only on commit. The drag writes the DOM directly
       // to stay at 60 fps, so this is the only place that can stop the wall
       // from being dragged past its own edge mid-gesture.
@@ -420,6 +460,7 @@ function AppView({
             selectedId={wall.state.selectedId}
             handlers={handlers}
             animate={animate}
+            wheeling={wheeling}
           />
           <Scrollbar
             transform={wall.transform}

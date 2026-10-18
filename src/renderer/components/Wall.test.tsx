@@ -158,6 +158,26 @@ describe('Wall', () => {
     })
   })
 
+  it('eases only while a wheel gesture is active', () => {
+    // The class is what turns the instant per-notch jump into a short glide;
+    // it must not linger, or a later drag would trail the cursor.
+    renderWall({ wheeling: true })
+    expect(screen.getByTestId('world').className).toContain('wheeling')
+
+    cleanup()
+    renderWall()
+    expect(screen.getByTestId('world').className).not.toContain('wheeling')
+  })
+
+  it('keeps the programmatic and wheel classes separate', () => {
+    // `.settling` and `.wheeling` carry different curves; a keyboard step that
+    // briefly carries both must still be painted with the longer one.
+    renderWall({ animate: true, wheeling: true })
+    const world = screen.getByTestId('world')
+    expect(world.className).toContain('settling')
+    expect(world.className).toContain('wheeling')
+  })
+
   it('positions each tile through custom properties, never left/top', () => {
     // The offset travels as `--tile-x`/`--tile-y` rather than as an inline
     // `transform`: an inline transform wins over the stylesheet's `.tile:hover`

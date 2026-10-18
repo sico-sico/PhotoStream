@@ -1197,6 +1197,25 @@ body {
 }
 
 /*
+ * Wheel-driven moves.
+ *
+ * A wheel notch is ~120 px and mice report notches every 50-100 ms, so applying
+ * each one instantly made the wall teleport a row at a time — reported as
+ * "there is no animation, it just sets a value". A short *linear* glide is the
+ * point: it matches the constant velocity of scrolling, whereas the decelerating
+ * curve below restarts on every notch and would pulse instead.
+ *
+ * Only the painting eases. The transform state is committed immediately, so the
+ * cull and the thumbnail requests still follow the real position.
+ *
+ * Declared before `.settling` so a programmatic move (which sets both classes
+ * briefly) keeps its own, longer curve rather than being shortened to this one.
+ */
+.world.wheeling {
+  transition: transform 0.1s linear;
+}
+
+/*
  * Animated moves.
  *
  * Applied only for keyboard steps and auto-scroll. Dragging and wheel zoom must
@@ -1209,7 +1228,8 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .world.settling {
+  .world.settling,
+  .world.wheeling {
     transition: none;
   }
 }
