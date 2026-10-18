@@ -12,11 +12,13 @@
 export const en = {
   'app.title': 'PhotoStream',
   'app.emptyTitle': 'PhotoStream',
-  'app.emptyBody': 'Choose a folder of JPEGs to build your wall.',
+  'app.emptyBody': 'Choose a folder of JPEGs, or drop one onto this window, to build your wall.',
   'app.emptyAction': 'Open folder…',
+  'app.dropHint': 'Drop a folder or a photo to open it',
   'app.errorRetry': 'Try another folder',
 
   'toolbar.openFolder': 'Open folder…',
+  'toolbar.openFolderHint': 'Open a folder, or drop one anywhere on the window',
   'toolbar.scanning': 'Scanning…',
   'toolbar.noFolder': 'No folder selected',
   'toolbar.layoutAria': 'Layout',
@@ -36,16 +38,26 @@ export const en = {
   'toolbar.language': 'Language',
   'toolbar.settings': 'Settings',
 
+  'settings.recursive': 'Include photos in subfolders',
+
+  'history.show': 'Recent folders',
+  'history.title': 'Recent folders',
+  'history.remove': 'Forget {name}',
+  'history.clear': 'Clear all',
+  'history.empty': 'No recent folders yet',
+
   'filters.aria': 'Filters',
   'filters.from': 'Date from',
   'filters.to': 'Date to',
   'filters.fileName': 'File name',
-  'filters.fileNamePlaceholder': 'e.g. Kyoto',
+  'filters.fileNamePlaceholder': 'e.g. Kyoto or IMG_*',
+  'filters.fileNameHint': 'Use * for any characters and ? for one; without a wildcard it matches anywhere in the name.',
   'filters.reset': 'Reset',
   'filters.range': '{min} → {max}',
   'filters.active': 'filtered',
 
   'wall.aria': 'Photo wall',
+  'wall.scrollbar': 'Scroll the wall',
 
   'tile.noDate': 'no capture date',
   'tile.unknownDate': '—',
@@ -87,6 +99,24 @@ export const en = {
   'exif.software': 'Software',
 
   'dialog.chooseFolder': 'Choose photo folder',
+
+  'about.title': 'About PhotoStream',
+  'about.version': 'Version {version}',
+  'about.description': 'A photo wall for a folder of JPEGs. Scan, pan, zoom, inspect.',
+  'about.runtime': 'Runtime',
+  'about.electron': 'Electron {version}',
+  'about.chromium': 'Chromium {version}',
+  'about.source': 'Source code',
+  'about.reportIssue': 'Report an issue',
+  'about.dataLocation': 'Data folder',
+  'about.shortcuts': 'Keyboard shortcuts',
+  'about.shortcutPan': 'Arrow keys — pan the wall',
+  'about.shortcutPanLarge': 'Shift + arrows — pan faster',
+  'about.shortcutFocus': 'Alt + arrows — move between photos',
+  'about.shortcutViewer': 'Enter / Space — open the selected photo',
+  'about.shortcutClose': 'Esc — close the viewer or dialog',
+  'about.shortcutInfo': 'I — details inside the viewer',
+  'about.close': 'Close',
 
   'window.minimize': 'Minimize',
   'window.maximize': 'Maximize',

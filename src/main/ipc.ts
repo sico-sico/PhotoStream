@@ -1,10 +1,13 @@
 import { ipcMain, dialog, shell, BrowserWindow } from 'electron'
 import { stat } from 'node:fs/promises'
-import { basename } from 'node:path'
-import type { AppInfo, Photo, Settings, ThumbLevel } from '../shared/types'
+import { basename, relative as relativePath, sep } from 'node:path'
+import type { AppInfo, Photo, ScanResult, Settings, ThumbLevel } from '../shared/types'
 import { IPC } from '../shared/ipc'
 import { scanDirectory } from './scanner'
+import { resolveOpenTarget } from './drop'
+import type { OpenDroppedResult } from '../shared/types'
 import { ensureThumbnail, ensureThumbnails, type ThumbRequest } from './thumbnails'
+import type { ThumbPriority } from '../shared/types'
 import { loadSettings, saveSettings } from './settings-store'
 import { watchDirectory, type DirectoryWatcher, type RawWatchEvent } from './watcher'
 import { thumbUrl, photoUrl } from './protocol'
@@ -39,10 +42,18 @@ export class PhotoLibrary {
     return this.photos
   }
 
+  /**
+   * Whether subfolders are scanned, and whether watcher events below the root
+   * are honoured. Set on each `open()` so switching the preference and
+   * re-opening the same folder takes effect.
+   */
+  private recursive = false
+
   /** Open a directory: scan it, start watching, and warm thumbnails in the background. */
-  async open(dir: string): Promise<{ dir: string; photos: Photo[]; skipped: number; durationMs: number }> {
+  async open(dir: string, options: { recursive?: boolean } = {}): Promise<ScanResult> {
     this.close()
-    const result = await scanDirectory(dir, { cache: this.metadataCache })
+    this.recursive = options.recursive === true
+    const result = await scanDirectory(dir, { cache: this.metadataCache, recursive: this.recursive })
     this.photos = result.photos
     this.dir = result.dir
     this.watcher = this.startWatching(result.dir)
@@ -119,7 +130,9 @@ export class PhotoLibrary {
       const photo: Photo = {
         id: path.toLowerCase(),
         path,
-        name: basename(path),
+        // Relative to the library root, so a recursive scan keeps the subfolder
+        // in the name and two same-named photos stay distinguishable.
+        name: relativeTo(this.dir, path),
         width: meta.width,
         height: meta.height,
         takenAt: meta.takenAt,
@@ -137,7 +150,16 @@ export class PhotoLibrary {
   private startWatching(dir: string): DirectoryWatcher {
     return watchDirectory(dir, {
       onEvents: (events) => {
-        void this.resolveEvents(events).then(({ touched, removed }) => {
+        // The watcher is always recursive, so it sees subfolders whether or not
+        // they are part of the library. Filtering here keeps the scan and the
+        // watcher consistent: with the setting off, a new file in a subfolder
+        // must not appear on the wall.
+        const relevant = this.recursive
+          ? events
+          : events.filter((event) => !relativePath(dir, event.path).includes(sep))
+
+        if (relevant.length === 0) return
+        void this.resolveEvents(relevant).then(({ touched, removed }) => {
           // A deletion changes the wall without producing a photo to thumbnail.
           if (touched.length === 0 && !removed) return
           // New photos need thumbnails; changed ones need theirs rebuilt.
@@ -171,9 +193,9 @@ export class PhotoLibrary {
    * `full` bypasses the cache entirely and streams the original, which is what
    * keeps the wall sharp at high zoom.
    */
-  async thumbUrlFor(photo: Photo, level: ThumbLevel): Promise<string> {
-    if (level === 'full') return photoUrl(basename(photo.path))
-    const file = await ensureThumbnail(this.thumbCacheDir, toThumbRequest(photo, level))
+  async thumbUrlFor(photo: Photo, level: ThumbLevel, priority: ThumbPriority = 'interactive'): Promise<string> {
+    if (level === 'full') return photoUrl(relativeTo(this.dir, photo.path))
+    const file = await ensureThumbnail(this.thumbCacheDir, toThumbRequest(photo, level), priority)
     return thumbUrl(basename(file))
   }
 }
@@ -187,10 +209,29 @@ function toThumbRequest(photo: Photo, level: Exclude<ThumbLevel, 'full'>): Thumb
   }
 }
 
+/**
+ * Path of `target` relative to `root`, with forward slashes.
+ *
+ * `pic://` URLs carry a path, not just a file name, so the protocol can serve
+ * photos in subfolders of a recursively scanned library. Forward slashes are
+ * used because that is what a URL path expects; `resolve()` on the other side
+ * normalises them back.
+ *
+ * Falls back to the bare file name when `target` is not under `root`, which can
+ * only happen for a stale watcher event.
+ */
+export function relativeTo(root: string, target: string): string {
+  const relative = relativePath(root, target)
+  if (!relative || relative.startsWith('..')) return basename(target)
+  return relative.split(sep).join('/')
+}
+
 export interface IpcDeps {
   library: PhotoLibrary
   dataDir: string
   appVersion: string
+  /** Electron and Chromium versions, for the About dialog. */
+  versions: { electron: string; chromium: string }
   /** Locale tags the OS prefers, most preferred first. */
   systemLocales: string[]
 }
@@ -202,7 +243,9 @@ export function registerIpc(deps: IpcDeps): void {
       version: deps.appVersion,
       dataDir: deps.dataDir,
       thumbCacheDir: deps.library.thumbCacheDir,
-      systemLocales: deps.systemLocales
+      systemLocales: deps.systemLocales,
+      electron: deps.versions.electron,
+      chromium: deps.versions.chromium
     })
   )
 
@@ -217,7 +260,30 @@ export function registerIpc(deps: IpcDeps): void {
     return result.filePaths[0]
   })
 
-  ipcMain.handle(IPC.openDirectory, (_event, dir: string) => deps.library.open(dir))
+  ipcMain.handle(IPC.openDirectory, (_event, dir: string, recursive?: boolean) =>
+    deps.library.open(dir, { recursive })
+  )
+
+  /**
+   * Open whatever was dropped on the window or handed over by "Open with".
+   *
+   * Dropping a folder opens it. Dropping a photo — or opening the app from
+   * Explorer's context menu with a file selected — opens the folder that photo
+   * lives in *and* reports which photo to focus, so the wall lands on the photo
+   * the user pointed at rather than on the newest one in the folder.
+   *
+   * The path is resolved and type-checked in the main process: the renderer must
+   * not be trusted to decide what a path is.
+   */
+  ipcMain.handle(
+    IPC.openDropped,
+    async (_event, target: string, recursive?: boolean): Promise<OpenDroppedResult> => {
+      const resolved = await resolveOpenTarget(target)
+      const result = await deps.library.open(resolved.dir, { recursive })
+      return { ...result, photo: resolved.photo }
+    }
+  )
+
   ipcMain.handle(IPC.settingsLoad, () => loadSettings(deps.dataDir))
   ipcMain.handle(IPC.settingsSave, (_event, settings: Settings) => saveSettings(deps.dataDir, settings))
   ipcMain.handle(IPC.thumbUrl, (_event, photo: Photo, level: ThumbLevel) => deps.library.thumbUrlFor(photo, level))
@@ -228,20 +294,28 @@ export function registerIpc(deps: IpcDeps): void {
   // behind every other tile in the request. Pushing each one immediately lets
   // the wall fill in progressively. The level travels with the result so a slow
   // low-quality encode cannot overwrite a sharper one that already arrived.
-  ipcMain.handle(IPC.thumbUrls, async (event, photos: Photo[], level: ThumbLevel): Promise<void> => {
-    const sender = event.sender
-    await Promise.all(
-      photos.map(async (photo) => {
-        try {
-          const url = await deps.library.thumbUrlFor(photo, level)
-          if (!sender.isDestroyed()) sender.send(IPC.thumbReady, [photo.id, url, level] as [string, string, ThumbLevel])
-        } catch {
-          // A single unreadable photo must not fail the whole batch; the tile
-          // simply stays on its placeholder.
-        }
-      })
-    )
-  })
+  //
+  // `priority` separates speculative work (scroll prefetching) from tiles that
+  // are on screen right now. Without it a prefetch sits at the head of the
+  // encode queue and the visible tiles wait behind photos the user is not even
+  // looking at yet.
+  ipcMain.handle(
+    IPC.thumbUrls,
+    async (event, photos: Photo[], level: ThumbLevel, priority: ThumbPriority = 'interactive'): Promise<void> => {
+      const sender = event.sender
+      await Promise.all(
+        photos.map(async (photo) => {
+          try {
+            const url = await deps.library.thumbUrlFor(photo, level, priority)
+            if (!sender.isDestroyed()) sender.send(IPC.thumbReady, [photo.id, url, level] as [string, string, ThumbLevel])
+          } catch {
+            // A single unreadable photo must not fail the whole batch; the tile
+            // simply stays on its placeholder.
+          }
+        })
+      )
+    }
+  )
   ipcMain.handle(IPC.revealInFolder, (_event, path: string) => shell.showItemInFolder(path))
 
   // Window controls for the custom title bar. Each one resolves the sender's

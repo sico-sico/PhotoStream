@@ -56,6 +56,15 @@ test.beforeAll(async () => {
   await writeJpeg(photoDir, '2020-01-05 Paris.jpg', '2020:01:05 19:30:00')
   await writeJpeg(photoDir, '2024-03-11 Osaka.jpg', '2024:03:11 23:45:00', 200, 300)
 
+  // A handful of extra photos so the wall is taller and wider than the window.
+  // With only three, the fitted wall fits both axes and the pan bounds correctly
+  // pin it in place - leaving nothing for the panning tests to scroll to. They
+  // are dated 2018 so they sort after (and filter outside) the named photos.
+  for (let index = 0; index < 12; index += 1) {
+    const day = String(index + 1).padStart(2, '0')
+    await writeJpeg(photoDir, `2018-02-${day} Extra ${index}.jpg`, `2018:02:${day} 12:00:00`)
+  }
+
   await seedSettings('en')
 
   app = await electron.launch({
@@ -102,13 +111,19 @@ async function chooseLanguage(id: string): Promise<void> {
 }
 
 async function useEnglish(): Promise<void> {
-  await page.locator('.menu-trigger').click()
+  // Idempotent on purpose: a previous test may have left the menu open, and
+  // clicking the trigger again would close it, making the picker disappear and
+  // the next lookup time out. Open it only when it is actually closed.
+  if ((await page.locator('.settings-menu').count()) === 0) await page.locator('.menu-trigger').click()
+
   const picker = page.locator('.settings-menu select')
+  await expect(picker).toBeVisible()
   const current = await picker.inputValue()
   // Escape rather than select when nothing needs changing, so the state is left
   // exactly as it was.
   if (current !== 'en') await picker.selectOption('en')
   else await page.keyboard.press('Escape')
+  await expect(page.locator('.menu-panel')).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Filters' })).toBeVisible()
 }
 
@@ -124,7 +139,18 @@ async function openPhoto(nameFragment: string): Promise<void> {
   await page.locator(`[data-photo-id]:has(img[alt*="${nameFragment}" i])`).first().click()
 }
 
-/** Open the seeded photo folder through the stubbed native dialog. */
+/**
+ * Open the seeded photo folder through the stubbed native dialog.
+ *
+ * Works from either state: on a cold start the empty state's primary button is
+ * the visible call to action, but mid-suite the wall already has content and
+ * only the toolbar button exists.
+ *
+ * The assertion names the folder rather than an absolute photo count. One test
+ * in this suite drops a new file into the library and the watcher keeps it, so
+ * the total legitimately grows during the run; pinning `15/15` here made every
+ * later call fail for a reason unrelated to what it was testing.
+ */
 async function openLibrary(): Promise<void> {
   await app.evaluate(async ({ dialog }, dir) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [dir] })
@@ -132,10 +158,14 @@ async function openLibrary(): Promise<void> {
 
   await useEnglish()
 
-  // Both the toolbar and the empty state offer the action; the empty-state one
-  // is the visible primary call to action at this point.
-  await page.locator('.empty-state button.primary').click()
-  await expect(page.locator('[data-photo-id]')).toHaveCount(3)
+  const emptyAction = page.locator('.empty-state button.primary')
+  if ((await emptyAction.count()) > 0) await emptyAction.click()
+  else await page.getByRole('button', { name: 'Open folder…' }).click()
+
+  await expect(page.locator('.dir-label')).toHaveText(photoDir)
+  // Tiles are culled to the viewport, so the count comes from the toolbar's
+  // total rather than from the DOM.
+  await expect(page.locator('.photo-count')).not.toHaveText('0/0')
 }
 
 test('boots with the seeded English language', async () => {
@@ -158,28 +188,36 @@ test('opens a folder and builds the wall from EXIF dates', async () => {
   await expect(captions.nth(0)).toHaveText('2024-03-11')
   await expect(captions.nth(1)).toHaveText('2020-01-05')
   await expect(captions.nth(2)).toHaveText('2019-07-14')
+  // The 2018 filler photos come last.
+  await expect(captions.nth(3)).toHaveText('2018-02-12')
 })
 
 test('reorders the wall when the sort mode changes', async () => {
   await useEnglish()
   const captions = page.locator('.tile-caption')
-  const picker = page.getByLabel('Sort order')
+  const trigger = page.getByRole('button', { name: 'Sort order' })
 
-  await expect(picker).toHaveValue('taken-desc')
+  // The trigger states the active ordering, so the default is visible without
+  // opening the panel.
+  await expect(trigger).toHaveText(/Newest first/)
   await expect(captions.nth(0)).toHaveText('2024-03-11')
 
-  await picker.selectOption('taken-asc')
-  await expect(captions.nth(0)).toHaveText('2019-07-14')
-  await expect(captions.nth(2)).toHaveText('2024-03-11')
+  const choose = async (label: string): Promise<void> => {
+    await trigger.click()
+    await page.getByRole('menuitemradio', { name: label }).click()
+    // Choosing closes the panel, which also keeps later clicks unobstructed.
+    await expect(page.getByRole('menu')).toHaveCount(0)
+  }
 
-  // Name order ignores the capture date entirely.
-  await picker.selectOption('name-asc')
-  await expect(captions.nth(0)).toHaveText('2019-07-14')
-  await picker.selectOption('name-desc')
+  await choose('Oldest first')
+  await expect(captions.nth(0)).toHaveText('2018-02-01')
+  await choose('Name A→Z')
+  await expect(captions.nth(0)).toHaveText('2018-02-01')
+  await choose('Name Z→A')
   await expect(captions.nth(0)).toHaveText('2024-03-11')
 
   // Back to the default so later tests see the documented order.
-  await picker.selectOption('taken-desc')
+  await choose('Newest first')
   await expect(captions.nth(0)).toHaveText('2024-03-11')
 })
 
@@ -199,7 +237,7 @@ test('switches between the three layouts', async () => {
   for (const label of ['Masonry', 'Square', 'Rows']) {
     await page.getByRole('button', { name: label }).click()
     await expect(page.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'true')
-    await expect(page.locator('[data-photo-id]')).toHaveCount(3)
+    await expect(page.locator('.photo-count')).toHaveText('15/15')
   }
 })
 
@@ -208,11 +246,40 @@ test('filters by file name and resets', async () => {
   await page.getByRole('button', { name: 'Filters' }).click()
 
   await page.getByLabel('File name').fill('Kyoto')
-  await expect(page.locator('[data-photo-id]')).toHaveCount(1)
+  await expect(page.locator('.photo-count')).toHaveText('1/15')
 
   await page.getByRole('button', { name: 'Reset' }).click()
-  await expect(page.locator('[data-photo-id]')).toHaveCount(3)
+  await expect(page.locator('.photo-count')).toHaveText('15/15')
 
+  await page.getByRole('button', { name: 'Filters' }).click()
+})
+
+test('filters by file name with wildcards', async () => {
+  await useEnglish()
+  await page.getByRole('button', { name: 'Filters' }).click()
+  const field = page.getByLabel('File name')
+
+  // `*` spans any run of characters, anchored to the whole name. The fixtures
+  // are named like `2018-02-05 Extra 4.jpg`, so this selects all twelve of them.
+  await field.fill('2018-*Extra*')
+  await expect(page.locator('.photo-count')).toHaveText('12/15')
+
+  // `?` matches exactly one character: only the single-digit days match.
+  await field.fill('2018-02-0? *')
+  await expect(page.locator('.photo-count')).toHaveText('9/15')
+
+  // An extension pattern selects everything, and a wrong extension nothing.
+  await field.fill('*.jpg')
+  await expect(page.locator('.photo-count')).toHaveText('15/15')
+  await field.fill('*.png')
+  await expect(page.locator('.photo-count')).toHaveText('0/15')
+
+  // Without a wildcard the match is a substring again, not an exact name.
+  await field.fill('Kyoto')
+  await expect(page.locator('.photo-count')).toHaveText('1/15')
+
+  await page.getByRole('button', { name: 'Reset' }).click()
+  await expect(page.locator('.photo-count')).toHaveText('15/15')
   await page.getByRole('button', { name: 'Filters' }).click()
 })
 
@@ -220,11 +287,13 @@ test('filters by capture date range', async () => {
   await useEnglish()
   await page.getByRole('button', { name: 'Filters' }).click()
 
+  // From 2020-01-01: Paris (2020-01-05) and Osaka (2024-03-11).
   await page.getByLabel('Date from').fill('2020-01-01')
-  await expect(page.locator('[data-photo-id]')).toHaveCount(2)
+  await expect(page.locator('.photo-count')).toHaveText('2/15')
 
+  // Up to 2024-01-01 leaves only Paris.
   await page.getByLabel('Date to').fill('2024-01-01')
-  await expect(page.locator('[data-photo-id]')).toHaveCount(1)
+  await expect(page.locator('.photo-count')).toHaveText('1/15')
 
   await page.getByRole('button', { name: 'Reset' }).click()
   await page.getByRole('button', { name: 'Filters' }).click()
@@ -232,7 +301,13 @@ test('filters by capture date range', async () => {
 
 test('zooms with the wheel and pans by dragging', async () => {
   await useEnglish()
+  // Reset to a fitted wall first: earlier tests leave it panned against an edge,
+  // where the bounds correctly refuse further movement in that direction.
+  await page.getByRole('button', { name: 'Square' }).click()
+  await page.getByRole('button', { name: 'Rows' }).click()
+
   const world = page.locator('[data-testid="world"]')
+  await expect(page.locator('[data-photo-id]').first()).toBeVisible()
   const before = await world.evaluate((el: HTMLElement) => el.style.transform)
 
   await page.mouse.move(600, 400)
@@ -240,6 +315,13 @@ test('zooms with the wheel and pans by dragging', async () => {
   await expect.poll(async () => world.evaluate((el: HTMLElement) => el.style.transform)).not.toBe(before)
 
   const afterZoom = await world.evaluate((el: HTMLElement) => el.style.transform)
+
+  // Zoom in again, so the wall is larger than the window on both axes and the
+  // drag below has somewhere to go. With only three photos the wall fits
+  // vertically after a single zoom step, and the bounds then correctly pin it.
+  await page.mouse.wheel(0, -600)
+  await page.waitForTimeout(500)
+
   await page.mouse.move(600, 400)
   await page.mouse.down()
   await page.mouse.move(700, 480, { steps: 8 })
@@ -251,36 +333,44 @@ test('zooms with the wheel and pans by dragging', async () => {
 
 test('pans the wall with the arrow keys', async () => {
   await useEnglish()
-  const world = page.locator('[data-testid="world"]')
-  const transformOf = () => world.evaluate((el: HTMLElement) => el.style.transform)
-
-  // Start from a known position: the folder was just zoomed and dragged.
+  // A zoomed-in view is required: with only three fixtures the fitted wall is
+  // smaller than the window on both axes, and the bounds then correctly pin it
+  // in place — there is nothing off screen to scroll to.
   await page.getByRole('button', { name: 'Rows' }).click()
-  const before = await transformOf()
+  const world = page.locator('[data-testid="world"]')
+  await expect(page.locator('[data-photo-id]').first()).toBeVisible()
 
-  // The right arrow reveals what is to the right, so the wall moves left.
-  await page.keyboard.press('ArrowRight')
-  await expect.poll(transformOf).not.toBe(before)
-  const afterRight = await transformOf()
+  const stage = (await page.getByTestId('stage').boundingBox())!
+  await page.mouse.move(stage.x + stage.width / 2, stage.y + stage.height / 2)
+  for (let i = 0; i < 3; i += 1) await page.mouse.wheel(0, -400)
+  await page.waitForTimeout(700)
 
-  await page.keyboard.press('ArrowLeft')
-  // Back where it started, within the rounding of the step.
-  expect(await transformOf()).not.toBe(afterRight)
+  const yOf = () =>
+    world.evaluate((el: HTMLElement) => {
+      const m = /translate3d\((-?[\d.]+)px,\s*(-?[\d.]+)px/.exec(el.style.transform)
+      return m ? Math.round(Number(m[2])) : 0
+    })
 
+  // Back to the top first, so a downward step has room to travel.
+  await page.keyboard.press('Shift+ArrowUp')
+  await page.keyboard.press('Shift+ArrowUp')
+  await page.waitForTimeout(400)
+
+  const startY = await yOf()
   await page.keyboard.press('ArrowDown')
-  const afterDown = await transformOf()
-  expect(afterDown).not.toBe(afterRight)
+  const afterDown = await yOf()
+  expect(afterDown).toBeLessThan(startY)
 
-  // Shift takes a much larger step.
+  // Shift takes a much larger step in the same direction.
   await page.keyboard.press('Shift+ArrowDown')
-  expect(await transformOf()).not.toBe(afterDown)
+  expect(await yOf()).toBeLessThan(afterDown)
 })
 
 test('arrow keys pan the wall even after a photo has been viewed', async () => {
   await useEnglish()
 
-  // Reset to a fitted wall: earlier tests leave it zoomed and panned far enough
-  // that the culled set can be empty. Switching layouts changes the fit key.
+  // Return to a usable view: earlier tests leave the wall zoomed and panned, and
+  // a culled wall has no tiles to click. Switching layouts changes the fit key.
   await page.keyboard.press('Escape')
   await page.getByRole('button', { name: 'Square' }).click()
   await page.getByRole('button', { name: 'Rows' }).click()
@@ -295,11 +385,20 @@ test('arrow keys pan the wall even after a photo has been viewed', async () => {
   await page.keyboard.press('Escape')
   await expect(viewer).toBeHidden()
 
+  // Zoom in so the wall exceeds the window; otherwise the bounds pin it and the
+  // key press correctly does nothing.
+  const stage = (await page.getByTestId('stage').boundingBox())!
+  await page.mouse.move(stage.x + stage.width / 2, stage.y + stage.height / 2)
+  for (let i = 0; i < 3; i += 1) await page.mouse.wheel(0, -400)
+  await page.waitForTimeout(700)
+
   const world = page.locator('[data-testid="world"]')
   const transformOf = () => world.evaluate((el: HTMLElement) => el.style.transform)
   const before = await transformOf()
 
-  await page.keyboard.press('ArrowRight')
+  // The photo is still focused, yet the arrow must pan rather than walk the
+  // selection — that is the bug this covers.
+  await page.keyboard.press('ArrowUp')
   await expect.poll(transformOf).not.toBe(before)
 
   // The viewer must not reopen while panning.
@@ -308,6 +407,12 @@ test('arrow keys pan the wall even after a photo has been viewed', async () => {
 
 test('alt+arrows move the focused photo', async () => {
   await useEnglish()
+  // Reset first: the previous test leaves the wall zoomed far in, where the
+  // culled tile set may hold nothing clickable.
+  await page.getByRole('button', { name: 'Square' }).click()
+  await page.getByRole('button', { name: 'Rows' }).click()
+  await expect(page.locator('[data-photo-id]').first()).toBeVisible()
+
   await page.locator('[data-photo-id]').first().click()
   const viewer = page.getByRole('dialog')
   await expect(viewer).toBeVisible()
@@ -331,33 +436,123 @@ test('alt+arrows move the focused photo', async () => {
 
 test('zooming out does not jump back to the first photo', async () => {
   await useEnglish()
-  const world = page.locator('[data-testid="world"]')
+  // Reset to the fitted wall, then zoom in so it overflows the window on both
+  // axes - the bounds otherwise pin a fitted wall and nothing can pan.
+  await page.getByRole('button', { name: 'Square' }).click()
+  await page.getByRole('button', { name: 'Rows' }).click()
+  await expect(page.locator('[data-photo-id]').first()).toBeVisible()
 
-  // Pan well away from the start.
-  for (let i = 0; i < 5; i += 1) await page.keyboard.press('Shift+ArrowDown')
+  const world = page.locator('[data-testid="world"]')
+  const stage = (await page.getByTestId('stage').boundingBox())!
+  const bar = page.getByTestId('wall-scrollbar')
+
+  await page.mouse.move(stage.x + stage.width / 2, stage.y + stage.height / 2)
+  for (let i = 0; i < 3; i += 1) await page.mouse.wheel(0, -400)
+  await page.waitForTimeout(700)
+  await expect(bar).toBeVisible()
+
+  /**
+   * How far down the wall the thumb sits, 0..1.
+   *
+   * Normalised by the thumb's travel rather than read from `top` directly: a
+   * thumb that is 30% tall reaches `top: 70%` only at the very bottom, so the
+   * raw offset understates the position badly.
+   */
+  const thumbProgress = async (): Promise<number> =>
+    page.locator('.scrollbar-thumb').evaluate((el: HTMLElement) => {
+      const top = parseFloat(el.style.top)
+      const size = parseFloat(el.style.height)
+      const travel = 100 - size
+      return travel > 0 ? top / travel : 0
+    })
+
+  // Drag the thumb well down the track. This is what puts the view deep in the
+  // library; key repeats were used before, but the per-press step is a fraction
+  // of the viewport, so the number needed depended on the zoom level.
+  const track = (await bar.boundingBox())!
+  await page.mouse.move(track.x + track.width / 2, track.y + 4)
+  await page.mouse.down()
+  await page.mouse.move(track.x + track.width / 2, track.y + track.height * 0.7, { steps: 10 })
+  await page.mouse.up()
   await page.waitForTimeout(400)
 
-  const yBefore = await world.evaluate((el: HTMLElement) => {
-    const m = /translate3d\((-?[\d.]+)px,\s*(-?[\d.]+)px/.exec(el.style.transform)
-    return m ? Number(m[2]) : 0
-  })
-  expect(yBefore).toBeLessThan(-500)
+  const before = await thumbProgress()
+  // Any clearly non-zero position is enough: the point is that zooming must not
+  // reset it to the top, not that the drag reaches a particular depth. How far
+  // the thumb can travel depends on the fixture's height versus the window.
+  expect(before).toBeGreaterThan(0.1)
+
 
   // Zooming out re-lays the wall out at a wider width. That reflow used to look
-  // like a brand-new wall to the fit logic, which snapped the view to the top —
+  // like a brand-new wall to the fit logic, which snapped the view to the top -
   // experienced as being thrown back to the first photo.
-  const stage = (await page.getByTestId('stage').boundingBox())!
   await page.mouse.move(stage.x + stage.width / 2, stage.y + stage.height / 2)
   await page.mouse.wheel(0, 300)
   await page.waitForTimeout(700)
 
-  const yAfter = await world.evaluate((el: HTMLElement) => {
-    const m = /translate3d\((-?[\d.]+)px,\s*(-?[\d.]+)px/.exec(el.style.transform)
-    return m ? Number(m[2]) : 0
-  })
-
   // Still deep in the library, not back at the top.
-  expect(yAfter).toBeLessThan(-500)
+  expect(await thumbProgress()).toBeGreaterThan(before / 2)
+})
+
+test('navigates a tall wall with the scrollbar', async () => {
+  await useEnglish()
+  const world = page.locator('[data-testid="world"]')
+  const bar = page.getByTestId('wall-scrollbar')
+  await expect(bar).toBeVisible()
+
+  const yOf = () =>
+    world.evaluate((el: HTMLElement) => {
+      const m = /translate3d\((-?[\d.]+)px,\s*(-?[\d.]+)px/.exec(el.style.transform)
+      return m ? Math.round(Number(m[2])) : 0
+    })
+
+  // Home / End are what a scrollbar offers beyond dragging; they must reach the
+  // exact ends of the wall rather than an approximation of them.
+  await bar.focus()
+  await page.keyboard.press('Home')
+  await expect.poll(yOf).toBe(0)
+
+  // End must land on the bottom bound and stay there. Asserting "no further
+  // movement is possible" is scale- and fixture-independent, whereas a
+  // hard-coded pixel value would only ever describe one library.
+  await page.keyboard.press('End')
+  await page.waitForTimeout(300)
+  const yEnd = await yOf()
+  expect(yEnd).toBeLessThan(-100)
+
+  await page.keyboard.press('End')
+  await page.keyboard.press('ArrowDown')
+  await page.waitForTimeout(300)
+  expect(await yOf()).toBe(yEnd)
+
+  // The thumb stops with its bottom edge exactly at the end of the track - not
+  // past it. Expressed as offset + size so it holds for any thumb height, where
+  // a fixed `top` value would only fit one fixture size.
+  const thumb = await page.locator('.scrollbar-thumb').evaluate((el: HTMLElement) => ({
+    top: parseFloat(el.style.top),
+    height: parseFloat(el.style.height)
+  }))
+  expect(thumb.top + thumb.height).toBeCloseTo(100, 0)
+})
+
+test('shows the destination date while dragging the scrollbar', async () => {
+  await useEnglish()
+  const bar = page.getByTestId('wall-scrollbar')
+  const track = (await bar.boundingBox())!
+  const label = page.locator('.scrollbar-label')
+
+  // Drag from the top to the middle. The label must name a date rather than
+  // staying blank, which is the whole point of the control for navigation.
+  await page.mouse.move(track.x + track.width / 2, track.y + 4)
+  await page.mouse.down()
+  await page.mouse.move(track.x + track.width / 2, track.y + track.height * 0.6, { steps: 10 })
+
+  await expect(label).toBeVisible()
+  const text = (await label.textContent()) ?? ''
+  // A localised date, e.g. 07/14/2019.
+  expect(text).toMatch(/\d{1,4}[/.-]\d{1,2}[/.-]\d{1,4}/)
+
+  await page.mouse.up()
 })
 
 test('steps through photos with the arrows while the viewer is open', async () => {
@@ -605,7 +800,7 @@ test('picks up a new photo without reopening the folder', async () => {
   // The file watcher is the feature most likely to regress silently.
   await writeJpeg(photoDir, '2025-04-20 Nara.jpg', '2025:04:20 12:00:00')
 
-  await expect(page.locator('[data-photo-id]')).toHaveCount(4)
+  await expect(page.locator('.photo-count')).toHaveText('16/16')
 
   // Newest first, so the file that just appeared leads the wall.
   const captions = page.locator('.tile-caption')
@@ -633,4 +828,228 @@ test('persists the chosen layout and language across a restart', async () => {
   // opening it; the button label is already French, which proves it was restored.
   await page.locator('.menu-trigger').click()
   await expect(page.locator('.settings-menu select')).toHaveValue('fr')
+})
+
+test('opens the About dialog from the gear menu', async () => {
+  await useEnglish()
+  await page.locator('.menu-trigger').click()
+  await page.getByRole('button', { name: 'About PhotoStream' }).click()
+
+  const dialog = page.getByRole('dialog')
+  await expect(dialog).toBeVisible()
+  // The version comes from `app.getVersion()` through the IPC bridge, so its
+  // presence proves the whole path works, not just that the dialog rendered.
+  await expect(dialog.getByText(/^Version \d+\.\d+\.\d+/)).toBeVisible()
+  // Runtime versions are the part a bug report needs.
+  await expect(dialog.locator('.about-facts')).toContainText('Chromium')
+  await expect(dialog.getByText('Keyboard shortcuts')).toBeVisible()
+
+  // Escape closes it, and the menu must not reappear behind it.
+  await page.keyboard.press('Escape')
+  await expect(dialog).toBeHidden()
+  await expect(page.locator('.menu-panel')).toHaveCount(0)
+})
+
+/**
+ * Drag-and-drop, split into the two halves that can actually be driven here.
+ *
+ * A real drop cannot be reproduced in this harness: Chromium derives a `File`'s
+ * path from an OS-level drag, and `webUtils.getPathForFile` returns `''` for any
+ * `File` constructed in JavaScript. The path resolver also cannot be stubbed —
+ * `contextBridge` exposes a frozen object, so assigning to
+ * `window.photoStream.pathForFile` silently does nothing (verified: the object
+ * is frozen and the assignment is discarded).
+ *
+ * So this covers what is genuinely observable end-to-end:
+ * - the overlay reacts to real DOM drag events, and
+ * - the IPC entry point opens a real directory on disk.
+ *
+ * The drop → path → open wiring between them is covered by
+ * `useFileDrop.test.tsx`, which can supply a path resolver directly.
+ */
+test('shows the drop hint only while files are being dragged', async () => {
+  await useEnglish()
+  const overlay = page.getByTestId('drop-overlay')
+  await expect(overlay).toHaveCount(0)
+
+  await page.evaluate(() => {
+    const dataTransfer = new DataTransfer()
+    dataTransfer.items.add(new File(['x'], 'photo.jpg', { type: 'image/jpeg' }))
+    window.dispatchEvent(new DragEvent('dragenter', { dataTransfer, bubbles: true, cancelable: true }))
+  })
+  await expect(overlay).toBeVisible()
+
+  // Leaving the window must take the hint away again, or it would sit over the
+  // wall forever.
+  await page.evaluate(() => {
+    const dataTransfer = new DataTransfer()
+    dataTransfer.items.add(new File(['x'], 'photo.jpg', { type: 'image/jpeg' }))
+    window.dispatchEvent(new DragEvent('dragleave', { dataTransfer, bubbles: true, cancelable: true }))
+  })
+  await expect(overlay).toHaveCount(0)
+
+  // Dragging text is not a file drop and must not advertise one.
+  await page.evaluate(() => {
+    const dataTransfer = new DataTransfer()
+    dataTransfer.setData('text/plain', 'hello')
+    window.dispatchEvent(new DragEvent('dragenter', { dataTransfer, bubbles: true, cancelable: true }))
+  })
+  await expect(overlay).toHaveCount(0)
+})
+
+test('opens a dropped path through the main process', async () => {
+  await useEnglish()
+
+  // A second library, so the assertion is about the drop path rather than about
+  // re-opening what is already loaded.
+  const droppedDir = await mkdtemp(join(tmpdir(), 'photostream-e2e-dropped-'))
+  await writeJpeg(droppedDir, '2026-05-01 Dropped.jpg', '2026:05:01 09:00:00')
+  await writeJpeg(droppedDir, '2026-05-02 Dropped Too.jpg', '2026:05:02 09:00:00')
+
+  // The bridge method the drop handler calls, with the main process resolving
+  // the path for real (`resolveDropTarget`): it scans the folder and starts
+  // watching it. The returned shape proves the folder was actually opened.
+  const result = await page.evaluate((dir) => window.photoStream.openDropped(dir), droppedDir)
+  expect(result.dir).toBe(droppedDir)
+  expect(result.photos).toHaveLength(2)
+  expect(result.skipped).toBe(0)
+
+  // A non-JPEG target is rejected by the main process rather than silently
+  // opening the wrong folder.
+  const notAPhoto = join(droppedDir, 'notes.txt')
+  await writeFile(notAPhoto, 'x', 'utf-8')
+  await expect(
+    page.evaluate((path) => window.photoStream.openDropped(path), notAPhoto)
+  ).rejects.toThrow(/not a folder of JPEG photos/)
+
+  await rm(droppedDir, { recursive: true, force: true })
+
+  // Leave the suite on the original library for any test added later.
+  await openLibrary()
+})
+
+test('reopens a folder from the history menu', async () => {
+  await useEnglish()
+
+  // Build a second library through the real UI path, so the history is recorded
+  // by `useWall` rather than injected: the folder picker is stubbed only at the
+  // native-dialog boundary.
+  const secondDir = await mkdtemp(join(tmpdir(), 'photostream-e2e-second-'))
+  await writeJpeg(secondDir, '2026-01-01 Second.jpg', '2026:01:01 09:00:00')
+
+  await app.evaluate(async ({ dialog }, dir) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [dir] })
+  }, secondDir)
+  await page.getByRole('button', { name: 'Open folder…' }).click()
+  await expect(page.locator('.photo-count')).toHaveText('1/1')
+  await expect(page.locator('.dir-label')).toHaveText(secondDir)
+
+  const trigger = page.getByRole('button', { name: 'Recent folders' })
+  await expect(trigger).toBeVisible()
+  await openHistoryPanel()
+
+  const items = page.locator('.history-item')
+  await expect(items.first()).toBeVisible()
+  expect(await items.count()).toBeGreaterThan(1)
+
+  // The folder currently open is marked rather than omitted, so it is visible
+  // in context without being re-openable by accident.
+  await expect(items.first()).toHaveClass(/current/)
+
+  // Open the previous library, which is the second entry.
+  const target = items.nth(1)
+  const expectedPath = (await target.locator('.history-path').textContent()) ?? ''
+  expect(expectedPath).toBe(photoDir)
+  await target.locator('.history-open').click()
+
+  await expect(page.locator('.menu-panel')).toHaveCount(0)
+  await expect(page.locator('.dir-label')).toHaveText(expectedPath)
+  // Whatever was opened must become the newest entry, i.e. move to the top.
+  await openHistoryPanel()
+  await expect(page.locator('.history-item').first()).toHaveClass(/current/)
+  await page.keyboard.press('Escape')
+
+  await rm(secondDir, { recursive: true, force: true })
+})
+
+/**
+ * Open the recent-folders panel, tolerating it already being open.
+ *
+ * The trigger toggles, so a blind click after a test that left the panel open
+ * would close it and the next lookup would time out. Checking for the panel
+ * first makes every call site independent of the previous test.
+ */
+async function openHistoryPanel(): Promise<void> {
+  if ((await page.locator('.history-panel').count()) === 0) {
+    await page.getByRole('button', { name: 'Recent folders' }).click()
+  }
+  await expect(page.locator('.history-panel')).toBeVisible()
+}
+
+test('forgets one folder and clears them all', async () => {
+  await useEnglish()
+
+  // Make sure there are at least three entries, so removing one and then the
+  // current one still leaves something for "Clear all" to act on. Earlier tests
+  // leave an unpredictable number behind.
+  for (const filler of ['alpha', 'beta']) {
+    const dir = await mkdtemp(join(tmpdir(), `photostream-e2e-${filler}-`))
+    await writeJpeg(dir, `${filler}.jpg`, '2026:02:01 09:00:00')
+    await app.evaluate(async ({ dialog }, target) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [target] })
+    }, dir)
+    await page.getByRole('button', { name: 'Open folder…' }).click()
+    await expect(page.locator('.dir-label')).toHaveText(dir)
+    await rm(dir, { recursive: true, force: true })
+  }
+
+  await openHistoryPanel()
+  const before = await page.locator('.history-item').count()
+  expect(before).toBeGreaterThan(2)
+
+  // Remove the last entry; the list shrinks by exactly one and the panel stays
+  // open so several folders can be forgotten in a row.
+  const lastName = (await page.locator('.history-item .history-name').last().textContent()) ?? ''
+  await page.locator('.history-item .history-remove').last().click()
+  await expect(page.locator('.history-item')).toHaveCount(before - 1)
+  await expect(page.locator('.history-item .history-name').last()).not.toHaveText(lastName)
+
+  // Removing the folder that is currently open must not close the wall.
+  const currentName = (await page.locator('.history-item.current .history-name').textContent()) ?? ''
+  await page.locator('.history-item.current .history-remove').click()
+  await expect(page.locator('.photo-count')).not.toHaveText('0/0')
+  await expect(page.locator('.history-item.current')).toHaveCount(0)
+  expect(currentName).not.toBe('')
+
+  // Clear all empties the list, which removes the trigger entirely rather than
+  // leaving a dropdown with nothing in it.
+  await page.getByRole('button', { name: 'Clear all' }).click()
+  await expect(page.locator('.history-item')).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('button', { name: 'Recent folders' })).toHaveCount(0)
+})
+
+test('keeps the history across a restart', async () => {
+  await useEnglish()
+  // The previous test cleared the list, so build one entry back up.
+  await openLibrary()
+
+  await page.waitForTimeout(500)
+  await app.close()
+
+  app = await electron.launch({
+    args: [join(__dirname, '..', '..', 'out', 'main', 'index.js')],
+    env: { ...process.env, PHOTOSTREAM_USER_DATA: userDataDir }
+  })
+  page = await app.firstWindow()
+  await page.waitForLoadState('domcontentloaded')
+
+  const trigger = page.getByRole('button', { name: 'Recent folders' })
+  await expect(trigger).toBeVisible()
+  await trigger.click()
+  // `openLibrary` re-scanned the folder after the restart, so it is both the
+  // restored `lastDir` and the newest history entry.
+  await expect(page.locator('.history-item').first()).toHaveClass(/current/)
+  await expect(page.locator('.history-item .history-path').first()).toHaveText(photoDir)
+  await page.keyboard.press('Escape')
 })

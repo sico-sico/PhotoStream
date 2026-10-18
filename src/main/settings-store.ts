@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile, rename } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { Settings } from '../shared/types'
 import { DEFAULT_SETTINGS } from '../shared/types'
+import { sanitizeHistory } from '../shared/history'
 
 /**
  * Settings persistence.
@@ -39,7 +40,13 @@ export function sanitizeSettings(raw: unknown): Settings {
     // Kept as-is rather than validated against the bundled list: a settings file
     // written by a build that shipped an extra language must not be silently
     // reset when opened by a build that does not.
-    locale: typeof source.locale === 'string' ? source.locale : DEFAULT_SETTINGS.locale
+    locale: typeof source.locale === 'string' ? source.locale : DEFAULT_SETTINGS.locale,
+    // A hand-edited or older file may hold anything here; `sanitizeHistory`
+    // drops non-strings, blanks and duplicates rather than trusting it.
+    history: sanitizeHistory(source.history),
+    // Anything other than an explicit `true` means off: a missing key in an
+    // older file must default to the documented behaviour, not to `undefined`.
+    recursive: source.recursive === true
   }
 }
 

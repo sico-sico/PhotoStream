@@ -1,5 +1,5 @@
-import { contextBridge, ipcRenderer } from 'electron'
-import type { AppInfo, Photo, Settings, ThumbLevel } from '../shared/types'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import type { AppInfo, OpenDroppedResult, Photo, ScanResult, Settings, ThumbLevel, ThumbPriority } from '../shared/types'
 import type { RawExif } from '../shared/exif'
 import { IPC } from '../shared/ipc'
 
@@ -12,15 +12,44 @@ import { IPC } from '../shared/ipc'
 export interface PhotoStreamApi {
   appInfo: () => Promise<AppInfo>
   pickDirectory: (locale?: string) => Promise<string | null>
-  openDirectory: (dir: string) => Promise<{ dir: string; photos: Photo[]; skipped: number; durationMs: number }>
+  /**
+   * Open a folder. `recursive` includes JPEGs in subfolders.
+   *
+   * The renderer passes its stored preference on every open rather than the main
+   * process remembering one, so switching the setting and re-opening the same
+   * folder takes effect immediately.
+   */
+  openDirectory: (dir: string, recursive?: boolean) => Promise<ScanResult>
+  /**
+   * Open a path dropped on the window.
+   *
+   * A file is accepted as well as a folder: dropping one photo opens the folder
+   * it lives in and focuses it. `photo` is that file's path, or `''`.
+   */
+  openDropped: (path: string, recursive?: boolean) => Promise<OpenDroppedResult>
+  /**
+   * A photo handed to the app from outside — Explorer's "Open with", or a
+   * second instance started that way.
+   */
+  onOpenExternal: (listener: (path: string) => void) => () => void
+  /**
+   * Absolute path behind a dropped `File`.
+   *
+   * `File.path` was removed in Electron 32, so the path has to be recovered in
+   * the preload through `webUtils`. The renderer only ever sees the string.
+   */
+  pathForFile: (file: File) => string
   loadSettings: () => Promise<Settings>
   saveSettings: (settings: Settings) => Promise<Settings>
   thumbUrl: (photo: Photo, level: ThumbLevel) => Promise<string>
   /**
    * Start resolving many renditions. Results arrive incrementally through
    * `onThumbReady`, so the first tiles appear without waiting for the batch.
+   *
+   * `priority: 'background'` marks speculative work (scroll prefetching) so the
+   * main process can encode tiles that are on screen first.
    */
-  requestThumbs: (photos: Photo[], level: ThumbLevel) => Promise<void>
+  requestThumbs: (photos: Photo[], level: ThumbLevel, priority?: ThumbPriority) => Promise<void>
   /** One rendition that just finished: `[photoId, url, level]`. */
   onThumbReady: (listener: (entry: [string, string, ThumbLevel]) => void) => () => void
   revealInFolder: (path: string) => Promise<void>
@@ -39,11 +68,21 @@ export interface PhotoStreamApi {
 const api: PhotoStreamApi = {
   appInfo: () => ipcRenderer.invoke(IPC.appInfo),
   pickDirectory: (locale) => ipcRenderer.invoke(IPC.pickDirectory, locale),
-  openDirectory: (dir) => ipcRenderer.invoke(IPC.openDirectory, dir),
+  openDirectory: (dir, recursive) => ipcRenderer.invoke(IPC.openDirectory, dir, recursive),
+  openDropped: (path, recursive) => ipcRenderer.invoke(IPC.openDropped, path, recursive),
+  pathForFile: (file) => {
+    try {
+      return webUtils.getPathForFile(file)
+    } catch {
+      // A synthetic `File` (a paste or a test fixture) has no path; the caller
+      // filters empty strings out, so this stays a no-op rather than a crash.
+      return ''
+    }
+  },
   loadSettings: () => ipcRenderer.invoke(IPC.settingsLoad),
   saveSettings: (settings) => ipcRenderer.invoke(IPC.settingsSave, settings),
   thumbUrl: (photo, level) => ipcRenderer.invoke(IPC.thumbUrl, photo, level),
-  requestThumbs: (photos, level) => ipcRenderer.invoke(IPC.thumbUrls, photos, level),
+  requestThumbs: (photos, level, priority) => ipcRenderer.invoke(IPC.thumbUrls, photos, level, priority),
   onThumbReady: (listener) => {
     const handler = (_event: unknown, entry: [string, string, ThumbLevel]): void => listener(entry)
     ipcRenderer.on(IPC.thumbReady, handler)
@@ -69,6 +108,14 @@ const api: PhotoStreamApi = {
     const handler = (_event: unknown, payload: { done: number; total: number }): void => listener(payload)
     ipcRenderer.on(IPC.thumbProgress, handler)
     return () => ipcRenderer.off(IPC.thumbProgress, handler)
+  },
+  onOpenExternal: (listener) => {
+    const handler = (_event: unknown, payload: { path?: unknown }): void => {
+      // The payload crosses an IPC boundary, so treat it as untrusted.
+      if (payload && typeof payload.path === 'string') listener(payload.path)
+    }
+    ipcRenderer.on(IPC.openExternal, handler)
+    return () => ipcRenderer.off(IPC.openExternal, handler)
   }
 }
 

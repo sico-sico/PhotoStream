@@ -26,10 +26,26 @@ if (hasDom) {
       configurable: true,
       writable: true,
       value: {
-        appInfo: async () => ({ version: '0.0.0', dataDir: '', thumbCacheDir: '', systemLocales: [] }),
+        appInfo: async () => ({
+          version: '0.0.0',
+          dataDir: '',
+          thumbCacheDir: '',
+          systemLocales: [],
+          electron: '0.0.0',
+          chromium: '0.0.0'
+        }),
         pickDirectory: async () => null,
         openDirectory: async () => ({ dir: '', photos: [], skipped: 0, durationMs: 0 }),
-        loadSettings: async () => ({ lastDir: '', layout: 'grid', filters: { from: '', to: '', text: '' }, locale: '' }),
+        openDropped: async () => ({ dir: '', photos: [], skipped: 0, durationMs: 0, photo: '' }),
+        pathForFile: () => '',
+        loadSettings: async () => ({
+          lastDir: '',
+          layout: 'grid',
+          sort: 'taken-desc',
+          filters: { from: '', to: '', text: '' },
+          locale: '',
+          history: []
+        }),
         saveSettings: async (settings: unknown) => settings,
         thumbUrl: async () => '',
         thumbUrls: async () => [],
@@ -40,6 +56,7 @@ if (hasDom) {
         isMaximized: async () => false,
         onWindowState: () => () => {},
         onPhotosChanged: () => () => {},
+        onOpenExternal: () => () => {},
         onThumbProgress: () => () => {}
       }
     })

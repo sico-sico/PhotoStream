@@ -14,45 +14,102 @@ function renderPicker(props: Partial<React.ComponentProps<typeof SortPicker>> = 
 }
 
 describe('SortPicker', () => {
-  it('offers the four orderings', () => {
+  it('shows the active ordering on the trigger', () => {
     renderPicker()
-    const options = screen.getAllByRole('option')
+    // The label has to be visible: an icon alone cannot say whether "newest"
+    // means by date or by name.
+    expect(screen.getByRole('button', { name: 'Sort order' })).toHaveTextContent('Newest first')
+  })
+
+  it('reflects the current mode in the trigger label', () => {
+    renderPicker({ sort: 'name-desc' })
+    expect(screen.getByRole('button', { name: 'Sort order' })).toHaveTextContent('Name Z→A')
+  })
+
+  it('does not open the panel until the trigger is clicked', () => {
+    renderPicker()
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+  })
+
+  it('offers the four orderings', async () => {
+    const user = userEvent.setup()
+    renderPicker()
+    await user.click(screen.getByRole('button', { name: 'Sort order' }))
+
+    const options = screen.getAllByRole('menuitemradio')
     expect(options).toHaveLength(4)
-    expect(options.map((option) => (option as HTMLOptionElement).value)).toEqual([
-      'taken-desc',
-      'taken-asc',
-      'name-asc',
-      'name-desc'
+    expect(options.map((option) => option.textContent)).toEqual([
+      'Newest first',
+      'Oldest first',
+      'Name A→Z',
+      'Name Z→A'
     ])
   })
 
-  it('reflects the current mode', () => {
-    renderPicker({ sort: 'name-desc' })
-    expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('name-desc')
+  it('marks exactly the active ordering', async () => {
+    const user = userEvent.setup()
+    renderPicker({ sort: 'taken-asc' })
+    await user.click(screen.getByRole('button', { name: 'Sort order' }))
+
+    const checked = screen.getAllByRole('menuitemradio', { checked: true })
+    expect(checked).toHaveLength(1)
+    expect(checked[0]).toHaveTextContent('Oldest first')
   })
 
-  it('emits the chosen mode', async () => {
+  it('emits the chosen mode and closes the panel', async () => {
     const user = userEvent.setup()
     const onChange = vi.fn()
     renderPicker({ onChange })
 
-    await user.selectOptions(screen.getByRole('combobox'), 'taken-asc')
+    await user.click(screen.getByRole('button', { name: 'Sort order' }))
+    await user.click(screen.getByRole('menuitemradio', { name: 'Oldest first' }))
+
     expect(onChange).toHaveBeenCalledWith('taken-asc')
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
   })
 
-  it('is labelled for screen readers', () => {
+  it('closes on Escape', async () => {
+    const user = userEvent.setup()
     renderPicker()
-    expect(screen.getByRole('combobox', { name: /sort order/i })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Sort order' }))
+
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
   })
 
-  it('translates the labels', () => {
+  it('closes on a click outside', async () => {
+    const user = userEvent.setup()
+    renderPicker()
+    await user.click(screen.getByRole('button', { name: 'Sort order' }))
+
+    await user.click(document.body)
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+  })
+
+  it('translates the labels', async () => {
+    const user = userEvent.setup()
     renderPicker({}, 'zh-CN')
-    expect(screen.getByRole('option', { name: '最新优先' })).toBeInTheDocument()
-    expect(screen.getByRole('option', { name: '最早优先' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '排序方式' }))
+
+    expect(screen.getByRole('menuitemradio', { name: '最新优先' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitemradio', { name: '最早优先' })).toBeInTheDocument()
   })
 
-  it('falls back to French labels', () => {
+  it('falls back to French labels', async () => {
+    const user = userEvent.setup()
     renderPicker({}, 'fr')
-    expect(screen.getByRole('option', { name: 'Plus récentes' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Ordre de tri' }))
+
+    expect(screen.getByRole('menuitemradio', { name: 'Plus récentes' })).toBeInTheDocument()
+  })
+
+  it('reuses the menu panel so it does not drag the window', async () => {
+    const user = userEvent.setup()
+    renderPicker()
+    await user.click(screen.getByRole('button', { name: 'Sort order' }))
+
+    // `.menu-panel` carries `-webkit-app-region: no-drag`; without it the
+    // toolbar's drag region would swallow clicks on the options.
+    expect(document.querySelector('.menu-panel')).toBeInTheDocument()
   })
 })

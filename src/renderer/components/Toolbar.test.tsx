@@ -41,10 +41,17 @@ function renderToolbar(props: Partial<React.ComponentProps<typeof Toolbar>> = {}
         busy={false}
         visibleCount={10}
         totalCount={20}
+        history={['/photos/trip', '/photos/2019']}
+        recursive={false}
+        onRecursiveChange={() => {}}
         onChooseFolder={() => {}}
+        onOpenHistory={() => {}}
+        onRemoveHistory={() => {}}
+        onClearHistory={() => {}}
         onLayoutChange={() => {}}
         onSortChange={() => {}}
         onToggleFilters={() => {}}
+        onAbout={() => {}}
         {...props}
       />
     </I18nProvider>
@@ -115,6 +122,33 @@ describe('Toolbar', () => {
     expect(screen.getByRole('button', { name: 'Minimize' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Maximize' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument()
+  })
+
+  it('draws a gear for the settings trigger, not a sun', () => {
+    renderToolbar()
+    const icon = document.querySelector('.menu-icon')!
+
+    // The icon that shipped before was a circle with eight straight lines
+    // radiating out of it. That is the conventional drawing of a sun: a cog's
+    // teeth are notches cut into its rim, not spikes away from it. Guards both
+    // halves of that shape so the mistake cannot come back.
+    expect(icon.querySelector('circle')).toBeNull()
+    // Twelve radiating spokes would also be a `path`, so check the geometry:
+    // a gear outline has exactly eight tooth tips.
+    const d = icon.querySelector('path')!.getAttribute('d')!
+    // Two subpaths *in one path*: the outline and the bore. They must stay in
+    // the same `d`, because `evenodd` only punches a hole between subpaths of a
+    // single path — split into two elements, the bore would be filled solid.
+    const subpaths = d.split(/(?=M)/).length
+    expect(subpaths).toBe(2)
+    expect(d).toContain('A2.1 2.1') // the bore is an arc, i.e. a real hole
+  })
+
+  it('fills the gear rather than stroking it', () => {
+    // At 15px a 1.4px outline around sixteen tooth edges closes into a blob.
+    renderToolbar()
+    const icon = document.querySelector('.menu-icon')!
+    expect(icon.classList.contains('menu-icon-solid')).toBe(true)
   })
 
   it('shows no progress counter', () => {

@@ -1,14 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { AboutDialog } from './components/AboutDialog'
 import { FilterPanel } from './components/FilterPanel'
 import { Toolbar } from './components/Toolbar'
 import { Viewer } from './components/Viewer'
 import { Wall } from './components/Wall'
 import type { WallHandle } from './components/Wall'
+import { Scrollbar } from './components/Scrollbar'
+import { dateAtWorldY } from '@shared/scrollbar'
+import { useFileDrop } from './hooks/useFileDrop'
 import { usePanZoom } from './hooks/usePanZoom'
 import { useWall } from './hooks/useWall'
 import { I18nProvider } from './i18n/I18nProvider'
 import { useI18n } from './i18n/context'
-import { fitWallTransform } from '@shared/transform'
+import { fitWallTransform, clampWallTransform } from '@shared/transform'
 import type { Transform } from '@shared/transform'
 import { centerOn, isComfortablyVisible, isPanKey, neighbourInDirection, panByKey } from '@shared/keyboard'
 import type { AppInfo } from '@shared/types'
@@ -80,14 +84,26 @@ function AppView({
   const transformRef = useRef(wall.transform)
   transformRef.current = wall.transform
 
-  /**
-   * Whether the next transform change should be animated.
+  /** Wall size and viewport, read by the drag path without re-creating handlers. */
+  const boundsRef = useRef({
+    worldWidth: wall.layout.width,
+    worldHeight: wall.layout.height,
+    viewport: { width: viewport.width, height: viewport.height }
+  })
+  boundsRef.current = {
+    worldWidth: wall.layout.width,
+    worldHeight: wall.layout.height,
+    viewport: { width: viewport.width, height: viewport.height }
+  }
+
+  /** Whether the next transform change should be animated.
    *
    * Only programmatic moves animate. A drag or a wheel zoom that eased would
    * lag the pointer, which feels broken rather than smooth, so those paths turn
    * it off before touching the transform.
    */
   const [animate, setAnimate] = useState(false)
+  const [aboutOpen, setAboutOpen] = useState(false)
   const animateTimer = useRef<number | null>(null)
   const moveWithAnimation = useCallback((next: Transform) => {
     setAnimate(true)
@@ -102,6 +118,17 @@ function AppView({
     if (animateTimer.current !== null) window.clearTimeout(animateTimer.current)
   }, [])
 
+  /**
+   * Drop a folder anywhere on the window to browse it.
+   *
+   * Stable callbacks are essential here: the hook subscribes to window events,
+   * so an inline arrow would tear down and re-add five listeners on every
+   * render — including every frame of a drag.
+   */
+  const openDropped = wall.openDropped
+  const pathForFile = useCallback((file: File) => window.photoStream.pathForFile(file), [])
+  const drop = useFileDrop({ onDrop: openDropped, pathForFile })
+
   const handlers = usePanZoom(wall.setTransform, {
     onItemClick: (id) => wall.select(id),
     onBackgroundClick: () => setFiltersOpen(false),
@@ -109,7 +136,13 @@ function AppView({
     onLiveTransform: (next) => {
       // Following the cursor exactly: no easing allowed mid-drag.
       setAnimate(false)
-      wallRef.current?.applyTransform(next)
+      // Clamped here too, not only on commit. The drag writes the DOM directly
+      // to stay at 60 fps, so this is the only place that can stop the wall
+      // from being dragged past its own edge mid-gesture.
+      const bounds = boundsRef.current
+      wallRef.current?.applyTransform(
+        clampWallTransform(next, bounds.worldWidth, bounds.worldHeight, bounds.viewport.width, bounds.viewport.height)
+      )
     },
     getTransform: () => transformRef.current
   })
@@ -137,6 +170,66 @@ function AppView({
     () => (wall.openPhoto ? wall.thumbUrls[wall.openPhoto.id] : undefined),
     [wall.openPhoto, wall.thumbUrls]
   )
+
+  /**
+   * Centre the wall on the photo the user opened from outside.
+   *
+   * Dropping a photo — or launching with "Open with → PhotoStream" — opens its
+   * folder and focuses the file, but focusing alone only lights up a tile: on a
+   * wall of thousands the tile may be far off screen. This scrolls it into view
+   * once the layout for the new folder exists.
+   *
+   * Keyed on the selected id so it runs after the scan has produced a layout
+   * containing that tile, and guarded by a ref so it applies once per launch
+   * rather than every time the selection changes (the user's own clicks must not
+   * be overridden).
+   */
+  const centredFor = useRef('')
+  useEffect(() => {
+    const id = wall.state.selectedId
+    if (!id || centredFor.current === id) return
+    if (wall.layout.items.length === 0) return
+
+    const item = wall.layout.items.find((entry) => entry.id === id)
+    if (!item) return
+
+    centredFor.current = id
+    const centre = { x: item.x + item.w / 2, y: item.y + item.h / 2 }
+    // Already visible at a comfortable size: leave the view alone, since the fit
+    // transform is what the user expects to see on opening a folder.
+    if (!isComfortablyVisible(wall.transform, centre, { width: viewport.width, height: viewport.height })) {
+      moveWithAnimation(centerOn(wall.transform, centre, { width: viewport.width, height: viewport.height }))
+    }
+  }, [moveWithAnimation, viewport.height, viewport.width, wall.layout.items, wall.state.selectedId, wall.transform])
+
+  /**
+   * Date of the topmost photo on screen, shown on the scrollbar.
+   *
+   * Read from the layout rather than the DOM: tiles are culled, so the photo at
+   * the top edge may not be mounted at all.
+   */
+  const layoutWithDates = useMemo(() => {
+    const dates = new Map(wall.visiblePhotos.map((photo) => [photo.id, photo.takenAt]))
+    return wall.layout.items.map((item) => ({
+      y: item.y,
+      h: item.h,
+      takenAt: dates.get(item.id) ?? ''
+    }))
+  }, [wall.layout.items, wall.visiblePhotos])
+
+  const dateAt = useCallback((worldY: number) => dateAtWorldY(layoutWithDates, worldY), [layoutWithDates])
+  const dateAtTop = useMemo(() => {
+    const scale = wall.transform.scale > 0 ? wall.transform.scale : 1
+    return dateAt(-wall.transform.y / scale)
+  }, [dateAt, wall.transform.scale, wall.transform.y])
+
+  /** While the thumb is dragged, the bar previews the date it would land on. */
+  const [scrollPreview, setScrollPreview] = useState('')
+  useEffect(() => {
+    if (scrollPreview === '') return
+    const timer = window.setTimeout(() => setScrollPreview(''), 1200)
+    return () => window.clearTimeout(timer)
+  }, [scrollPreview])
 
   /**
    * Arrow keys move the canvas; Alt+arrows move the focused photo.
@@ -203,10 +296,17 @@ function AppView({
         busy={wall.busy}
         visibleCount={wall.visiblePhotos.length}
         totalCount={wall.state.photos.length}
+        history={wall.state.history}
+        recursive={wall.state.recursive}
+        onRecursiveChange={wall.setRecursive}
         onChooseFolder={wall.chooseFolder}
+        onOpenHistory={wall.openHistoryEntry}
+        onRemoveHistory={wall.removeHistoryEntry}
+        onClearHistory={wall.clearHistory}
         onLayoutChange={wall.setLayout}
         onSortChange={wall.setSort}
         onToggleFilters={() => setFiltersOpen((open) => !open)}
+        onAbout={() => setAboutOpen(true)}
       />
 
       {filtersOpen ? (
@@ -236,18 +336,30 @@ function AppView({
           </button>
         </div>
       ) : (
-        <Wall
-          ref={wallRef}
-          layout={wall.layout}
-          photos={wall.visiblePhotos}
-          thumbUrls={wall.thumbUrls}
-          transform={wall.transform}
-          viewport={{ width: viewport.width, height: viewport.height }}
-          square={wall.state.layout === 'square'}
-          selectedId={wall.state.selectedId}
-          handlers={handlers}
-          animate={animate}
-        />
+        <div className="wall-area">
+          <Wall
+            ref={wallRef}
+            layout={wall.layout}
+            photos={wall.visiblePhotos}
+            thumbUrls={wall.thumbUrls}
+            transform={wall.transform}
+            viewport={{ width: viewport.width, height: viewport.height }}
+            square={wall.state.layout === 'square'}
+            selectedId={wall.state.selectedId}
+            handlers={handlers}
+            animate={animate}
+          />
+          <Scrollbar
+            transform={wall.transform}
+            worldHeight={wall.layout.height}
+            viewportHeight={viewport.height}
+            dateAtTop={scrollPreview || dateAtTop}
+            dateAt={dateAt}
+            onScroll={moveWithAnimation}
+            onPreview={setScrollPreview}
+            onScrollTarget={wall.prefetchForScroll}
+          />
+        </div>
       )}
 
       {wall.openPhoto ? (
@@ -258,8 +370,26 @@ function AppView({
           onPrev={() => wall.step(-1)}
           onNext={() => wall.step(1)}
           onReveal={() => void window.photoStream.revealInFolder(wall.openPhoto!.path)}
+          // Expanded only when this file was opened from outside the app.
+          initialInfoOpen={wall.state.viewerInfo}
         />
       ) : null}
+
+      {/* Only rendered mid-gesture, so it costs nothing the rest of the time. */}
+      {drop.dragging ? (
+        <div className="drop-overlay" data-testid="drop-overlay">
+          <div className="drop-card">
+            <span className="drop-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M3 7.5h6l2 2.5h10v9.5H3z" />
+              </svg>
+            </span>
+            {t('app.dropHint')}
+          </div>
+        </div>
+      ) : null}
+
+      {aboutOpen ? <AboutDialog onClose={() => setAboutOpen(false)} /> : null}
     </div>
   )
 }

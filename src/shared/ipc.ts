@@ -3,6 +3,8 @@ export const IPC = {
   appInfo: 'app:info',
   pickDirectory: 'dialog:pickDirectory',
   openDirectory: 'photos:open',
+  openDropped: 'photos:openDropped',
+  openExternal: 'photos:openExternal',
   photosChanged: 'photos:changed',
   settingsLoad: 'settings:load',
   settingsSave: 'settings:save',

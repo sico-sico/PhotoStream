@@ -3,11 +3,13 @@ import type { Catalog } from '../messages'
 export const fr: Catalog = {
   'app.title': 'PhotoStream',
   'app.emptyTitle': 'PhotoStream',
-  'app.emptyBody': 'Choisissez un dossier de fichiers JPEG pour créer votre mur.',
+  'app.emptyBody': 'Choisissez un dossier de fichiers JPEG, ou déposez-le sur cette fenêtre, pour créer votre mur.',
   'app.emptyAction': 'Ouvrir un dossier…',
+  'app.dropHint': 'Déposez un dossier ou une photo pour l’ouvrir',
   'app.errorRetry': 'Essayer un autre dossier',
 
   'toolbar.openFolder': 'Ouvrir un dossier…',
+  'toolbar.openFolderHint': 'Ouvrir un dossier, ou en déposer un n’importe où sur la fenêtre',
   'toolbar.scanning': 'Analyse…',
   'toolbar.noFolder': 'Aucun dossier sélectionné',
   'toolbar.layoutAria': 'Disposition',
@@ -27,16 +29,26 @@ export const fr: Catalog = {
   'toolbar.language': 'Langue',
   'toolbar.settings': 'Paramètres',
 
+  'settings.recursive': 'Inclure les photos des sous-dossiers',
+
+  'history.show': 'Dossiers récents',
+  'history.title': 'Dossiers récents',
+  'history.remove': 'Oublier {name}',
+  'history.clear': 'Tout effacer',
+  'history.empty': 'Aucun dossier récent',
+
   'filters.aria': 'Filtres',
   'filters.from': 'Date de début',
   'filters.to': 'Date de fin',
   'filters.fileName': 'Nom du fichier',
-  'filters.fileNamePlaceholder': 'ex. Kyoto',
+  'filters.fileNamePlaceholder': 'ex. Kyoto ou IMG_*',
+  'filters.fileNameHint': "* remplace plusieurs caractères, ? un seul ; sans joker, la recherche porte sur le nom entier.",
   'filters.reset': 'Réinitialiser',
   'filters.range': '{min} → {max}',
   'filters.active': 'filtre actif',
 
   'wall.aria': 'Mur de photos',
+  'wall.scrollbar': 'Faire défiler le mur',
 
   'tile.noDate': 'aucune date de prise de vue',
   'tile.unknownDate': '—',
@@ -78,6 +90,24 @@ export const fr: Catalog = {
   'exif.software': 'Logiciel',
 
   'dialog.chooseFolder': 'Choisir un dossier de photos',
+
+  'about.title': 'À propos de PhotoStream',
+  'about.version': 'Version {version}',
+  'about.description': "Un mur de photos pour un dossier de fichiers JPEG. Analyser, déplacer, zoomer, examiner.",
+  'about.runtime': 'Environnement',
+  'about.electron': 'Electron {version}',
+  'about.chromium': 'Chromium {version}',
+  'about.source': 'Code source',
+  'about.reportIssue': 'Signaler un problème',
+  'about.dataLocation': 'Dossier de données',
+  'about.shortcuts': 'Raccourcis clavier',
+  'about.shortcutPan': 'Flèches — déplacer le mur',
+  'about.shortcutPanLarge': 'Maj + flèches — déplacement rapide',
+  'about.shortcutFocus': 'Alt + flèches — passer d’une photo à l’autre',
+  'about.shortcutViewer': 'Entrée / Espace — ouvrir la photo sélectionnée',
+  'about.shortcutClose': 'Échap — fermer la visionneuse ou la boîte de dialogue',
+  'about.shortcutInfo': 'I — détails dans la visionneuse',
+  'about.close': 'Fermer',
 
   'window.minimize': 'Réduire',
   'window.maximize': 'Agrandir',

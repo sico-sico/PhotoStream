@@ -5,6 +5,7 @@ import { PhotoLibrary, registerIpc } from './ipc'
 import { handlePicProtocol, registerPicScheme } from './protocol'
 import { currentDataDir, resolveThumbCacheDir } from './paths'
 import { MetadataCache } from './metadata-cache'
+import { photoFromArgv } from './drop'
 import { mkdir } from 'node:fs/promises'
 
 // Must run before `app.ready`: privileged schemes cannot be registered later.
@@ -83,7 +84,6 @@ app.whenReady().then(async () => {
   const thumbCacheDir = resolveThumbCacheDir(dataDir)
   await mkdir(thumbCacheDir, { recursive: true })
 
-  let photoDir = ''
   // One database for the whole session: EXIF parsing is the dominant cost of
   // opening a folder (measured at 1178 ms of 1296 ms for 3226 photos), and the
   // cache turns a repeat visit into a handful of indexed lookups.
@@ -100,6 +100,9 @@ app.whenReady().then(async () => {
     library,
     dataDir,
     appVersion: app.getVersion(),
+    // Reported so the About dialog can name the exact runtime; a rendering or
+    // protocol bug is much easier to place when the Chromium build is known.
+    versions: { electron: process.versions.electron, chromium: process.versions.chrome },
     // Electron resolves the OS preference list for us, including any
     // per-app overrides configured at the OS level.
     systemLocales: app.getPreferredSystemLanguages()
@@ -107,12 +110,55 @@ app.whenReady().then(async () => {
 
   await createWindow(dataDir, thumbCacheDir)
 
+  // A photo handed over on the command line ("Open with → PhotoStream") has to
+  // wait for the renderer to be ready, or the IPC message lands before anything
+  // is listening. `createWindow` resolves once the page has loaded.
+  const launchPhoto = photoFromArgv(process.argv)
+  if (launchPhoto) void openExternalPhoto(launchPhoto)
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) void createWindow(dataDir, thumbCacheDir)
   })
-
-  void photoDir
 })
+
+/**
+ * Hand a photo to the renderer to open.
+ *
+ * The window is focused first: when this comes from a second instance the user
+ * has just clicked the app in Explorer, so the window should come forward rather
+ * than silently change behind whatever they were looking at.
+ *
+ * Routed through the same notification the watcher uses, so the renderer's
+ * existing "open this path" handler is what runs — dropping a file and opening
+ * it from Explorer therefore behave identically by construction.
+ */
+function openExternalPhoto(path: string): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.focus()
+  broadcast(IPC.openExternal, { path })
+}
+
+/**
+ * "Open with → PhotoStream" starts a *new* process each time, so without this the
+ * user would get a second window and a second thumbnail queue. The second
+ * instance forwards its arguments to the first and exits.
+ */
+const gotInstanceLock = app.requestSingleInstanceLock()
+if (!gotInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', (_event, argv) => {
+    const path = photoFromArgv(argv)
+    if (path) openExternalPhoto(path)
+    else if (mainWindow && !mainWindow.isDestroyed()) {
+      // Launched with no file (a plain double-click on the exe while running):
+      // just bring the existing window forward.
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
+    }
+  })
+}
 
 app.on('window-all-closed', () => {
   library?.close()

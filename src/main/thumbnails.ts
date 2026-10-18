@@ -1,7 +1,7 @@
 import sharp from 'sharp'
 import { mkdir, rename, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import type { ThumbLevel } from '../shared/types'
+import type { ThumbLevel, ThumbPriority } from '../shared/types'
 import { THUMB_SIZES, thumbKey } from '../shared/thumbs'
 
 /**
@@ -78,20 +78,40 @@ const inFlight = new Map<string, Promise<string>>()
  */
 const MAX_CONCURRENT_ENCODES = 4
 let activeEncodes = 0
-const waiting: Array<() => void> = []
 
-async function acquire(): Promise<void> {
+/**
+ * Waiting encodes, in two priority lanes.
+ *
+ * A single FIFO was the reason scrollbar prefetching made things *worse*: a
+ * prefetch of hundreds of destination tiles sat at the head of the queue, so the
+ * tiles already on screen — the ones the user is looking at — waited behind
+ * them. Measured on 3226 photos: 15 s after a jump, 14 of 81 visible tiles were
+ * still empty.
+ *
+ * `interactive` is for what is on screen right now; `background` is for
+ * speculative work like scroll prefetching. Interactive always drains first.
+ */
+const lanes: { interactive: Array<() => void>; background: Array<() => void> } = {
+  interactive: [],
+  background: []
+}
+
+/** Which lane a request belongs to. Re-exported so callers need one import. */
+export type { ThumbPriority }
+
+async function acquire(priority: ThumbPriority): Promise<void> {
   if (activeEncodes < MAX_CONCURRENT_ENCODES) {
     activeEncodes += 1
     return
   }
-  await new Promise<void>((resolve) => waiting.push(resolve))
+  await new Promise<void>((resolve) => lanes[priority].push(resolve))
   activeEncodes += 1
 }
 
 function release(): void {
   activeEncodes -= 1
-  const next = waiting.shift()
+  // Interactive first: a prefetch must never delay a tile the user can see.
+  const next = lanes.interactive.shift() ?? lanes.background.shift()
   if (next) next()
 }
 
@@ -100,22 +120,26 @@ function release(): void {
  * Writes to a temporary name first so a crash mid-encode cannot leave a
  * half-written file that later looks like a cache hit.
  */
-export async function ensureThumbnail(cacheDir: string, request: ThumbRequest): Promise<string> {
+export async function ensureThumbnail(
+  cacheDir: string,
+  request: ThumbRequest,
+  priority: ThumbPriority = 'interactive'
+): Promise<string> {
   const target = thumbPath(cacheDir, request)
   if (await exists(target)) return target
 
   const pending = inFlight.get(target)
   if (pending) return pending
 
-  const job = encodeWithLimit(target, request).finally(() => {
+  const job = encodeWithLimit(target, request, priority).finally(() => {
     inFlight.delete(target)
   })
   inFlight.set(target, job)
   return job
 }
 
-async function encodeWithLimit(target: string, request: ThumbRequest): Promise<string> {
-  await acquire()
+async function encodeWithLimit(target: string, request: ThumbRequest, priority: ThumbPriority): Promise<string> {
+  await acquire(priority)
   try {
     return await buildThumbnail(target, request)
   } finally {
@@ -155,9 +179,16 @@ async function buildThumbnail(target: string, request: ThumbRequest): Promise<st
 export async function ensureThumbnails(
   cacheDir: string,
   requests: readonly ThumbRequest[],
-  options: { concurrency?: number; onDone?: (done: number, total: number) => void; signal?: AbortSignal } = {}
+  options: {
+    concurrency?: number
+    onDone?: (done: number, total: number) => void
+    signal?: AbortSignal
+    /** `background` for speculative work such as scroll prefetching. */
+    priority?: ThumbPriority
+  } = {}
 ): Promise<{ built: number; failed: number }> {
   const concurrency = Math.max(1, options.concurrency ?? THUMB_CONCURRENCY)
+  const priority = options.priority ?? 'interactive'
   let cursor = 0
   let done = 0
   let built = 0
@@ -170,7 +201,7 @@ export async function ensureThumbnails(
       cursor += 1
       if (index >= total || options.signal?.aborted) return
       try {
-        await ensureThumbnail(cacheDir, requests[index])
+        await ensureThumbnail(cacheDir, requests[index], priority)
         built += 1
       } catch {
         failed += 1

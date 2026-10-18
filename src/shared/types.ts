@@ -24,6 +24,18 @@ export interface ScanResult {
   durationMs: number
 }
 
+/**
+ * Result of opening a path the user handed to the app.
+ *
+ * `photo` is the absolute path to focus, or `''` when a whole folder was opened.
+ * It is deliberately a path rather than an id: the renderer looks up the photo
+ * by id, and building that id here would duplicate the hashing rule that lives
+ * in the scanner.
+ */
+export interface OpenDroppedResult extends ScanResult {
+  photo: string
+}
+
 export type LayoutMode = 'grid' | 'masonry' | 'square'
 
 /**
@@ -60,6 +72,22 @@ export interface Settings {
    * "follow system" keeps tracking it after an OS language change.
    */
   locale: string
+  /**
+   * Recently opened folders, most recent first.
+   *
+   * Persisted here rather than in a separate file because it is a preference in
+   * the same sense as the layout: losing it should be harmless, and it has no
+   * meaning outside the settings that produced it.
+   */
+  history: string[]
+  /**
+   * Whether to include JPEGs in subfolders, recursively.
+   *
+   * Off by default. A folder is usually one shoot, and pulling in every
+   * `_rejected/` and `.cache/` subfolder would bury the photos the user meant.
+   * Users who organise by year (`Pictures/2024/...`) can turn it on.
+   */
+  recursive: boolean
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -67,7 +95,9 @@ export const DEFAULT_SETTINGS: Settings = {
   layout: 'grid',
   sort: DEFAULT_SORT,
   filters: EMPTY_FILTERS,
-  locale: ''
+  locale: '',
+  history: [],
+  recursive: false
 }
 
 /**
@@ -77,6 +107,16 @@ export const DEFAULT_SETTINGS: Settings = {
  * file, which is the only way to stay sharp at high magnification.
  */
 export type ThumbLevel = 'wall' | 'zoom' | 'full'
+
+/**
+ * How urgently a thumbnail is needed.
+ *
+ * `interactive` is for tiles that are on screen right now; `background` is for
+ * speculative work such as scroll prefetching. The main process drains the
+ * interactive lane first, so a prefetch can never delay something the user is
+ * looking at.
+ */
+export type ThumbPriority = 'interactive' | 'background'
 
 export interface ThumbRequest {
   path: string
@@ -99,4 +139,13 @@ export interface AppInfo {
    * sensible initial language; the user's own choice always wins.
    */
   systemLocales: string[]
+  /**
+   * Runtime versions, shown in the About dialog.
+   *
+   * Reported rather than inferred so a bug report can name the exact Chromium
+   * build that rendered a layout, which matters when tracking rendering and
+   * `pic://` protocol issues.
+   */
+  electron: string
+  chromium: string
 }

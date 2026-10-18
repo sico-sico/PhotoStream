@@ -8,6 +8,21 @@
   --accent: #5b8cff;
   --danger: #ff6b6b;
   color-scheme: dark;
+
+  /*
+   * One set of control metrics for the whole toolbar.
+   *
+   * Every button, chip, split button and dropdown trigger resolves its height,
+   * radius, padding and font from these four values. Before this, each control
+   * carried its own numbers (6/12 for `.button`, 6/10 plus a 132px min-width for
+   * the sort trigger, 3px of container padding around the chips), so the bar had
+   * four slightly different heights and three different corner radii sitting on
+   * one line — which reads as sloppy rather than as a set of controls.
+   */
+  --control-height: 28px;
+  --control-radius: 7px;
+  --control-padding-x: 11px;
+  --control-font: 12px;
 }
 
 * {
@@ -37,6 +52,69 @@ body {
 }
 
 /* ---------- toolbar ---------- */
+
+/*
+ * The brand mark, pinned to the far left.
+ *
+ * It is deliberately not a button: it does nothing on click, so giving it button
+ * affordances would promise an interaction that does not exist. It is also part
+ * of the window's drag region, which gives the bar a grabbable area at the very
+ * left where a user naturally reaches for it.
+ */
+.toolbar-logo {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  /* Negative left margin pulls the mark towards the window edge so it optically
+     aligns with the 12px bar padding. */
+  margin-left: -2px;
+  color: var(--text);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.toolbar-logo svg {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+}
+
+.toolbar-logo .logo-tile {
+  fill: #2a3147;
+}
+
+.toolbar-logo .logo-light {
+  fill: #e8e8ee;
+}
+
+.toolbar-logo .logo-accent {
+  fill: var(--accent);
+}
+
+.toolbar-logo .logo-mid {
+  fill: #e8e8ee;
+  fill-opacity: 0.42;
+}
+
+.toolbar-logo .logo-dim {
+  fill: #e8e8ee;
+  fill-opacity: 0.74;
+}
+
+.toolbar-logo-word {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* The wordmark is the first thing to go when the bar gets tight: the columns
+   alone still identify the app. */
+@media (max-width: 1100px) {
+  .toolbar-logo-word {
+    display: none;
+  }
+}
 
 .toolbar {
   position: relative;
@@ -138,12 +216,51 @@ body {
   margin: -8px 0;
 }
 
+/*
+ * The layout switcher is a segmented control: three chips share a recessed track
+ * and only the active one is filled.
+ *
+ * The track is exactly `--control-height` tall including its border, and the
+ * chips fill it minus that border and their own padding. Expressed with
+ * `box-sizing: border-box` arithmetic like this, the whole control's outer box
+ * matches the buttons beside it to the pixel, which a fixed chip height could
+ * not guarantee once the track gained a border.
+ */
 .layout-switch {
   display: flex;
-  gap: 4px;
+  align-items: stretch;
+  gap: 2px;
+  height: var(--control-height);
+  padding: 2px;
   background: var(--bg-raised);
-  padding: 3px;
-  border-radius: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
+  box-sizing: border-box;
+}
+
+.layout-switch .button.chip {
+  /* Fill the track rather than sizing themselves. */
+  min-height: 0;
+  height: 100%;
+  padding: 0 10px;
+  border: 0;
+  border-radius: calc(var(--control-radius) - 3px);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--control-font);
+  font-weight: 500;
+}
+
+.layout-switch .button.chip:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+}
+
+.layout-switch .button.chip.active {
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
+  font-weight: 600;
 }
 
 .toolbar-stats {
@@ -169,6 +286,359 @@ body {
   opacity: 0.85;
 }
 
+/* ---------- sort picker ---------- */
+
+/*
+ * Present to assistive technology, absent on screen.
+ *
+ * `display: none` / `visibility: hidden` would remove the element from the
+ * accessibility tree as well, which defeats the point of a visually hidden
+ * label. The clip-rect technique keeps it readable while taking no space.
+ */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/*
+ * Sits beside Filters and matches it: same height, same ghost chrome, so the bar
+ * reads as one row of controls. The label is part of the button because an icon
+ * alone cannot say whether "newest" means by date or by name.
+ */
+.sort-picker {
+  position: relative;
+  display: flex;
+}
+
+.sort-trigger {
+  /* No fixed min-width: it made the control wider than its label needed and
+     left a gap between the text and the caret. The bar absorbs the few pixels
+     of width that change as the label switches. */
+  padding: 0 9px 0 var(--control-padding-x);
+  gap: 7px;
+  color: var(--text-dim);
+}
+
+.sort-trigger:hover,
+.sort-trigger[aria-expanded='true'] {
+  background: var(--bg-raised);
+  color: var(--text);
+}
+
+.sort-icon {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  /* The arrow sits close to the glyph; a touch of opacity keeps it secondary. */
+  color: var(--text-dim);
+}
+
+.sort-trigger[aria-expanded='true'] .sort-icon {
+  color: var(--text);
+}
+
+.sort-trigger-label {
+  flex: 1 1 auto;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
+.sort-caret {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  opacity: 0.7;
+}
+
+.sort-panel {
+  left: 0;
+  right: auto;
+  min-width: 208px;
+  padding: 6px;
+}
+
+.sort-option {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sort-option:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+}
+
+.sort-option.active {
+  background: rgba(91, 140, 255, 0.14);
+  color: var(--text);
+}
+
+.sort-option-icon {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The tick occupies its slot in every row so the labels stay aligned. */
+.sort-check {
+  flex: 0 0 auto;
+  margin-left: auto;
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0;
+}
+
+.sort-option.active .sort-check {
+  opacity: 1;
+}
+
+/* ---------- open-folder split button ---------- */
+
+/*
+ * "Open folder" and its history caret are one control, not two buttons that
+ * happen to sit next to each other.
+ *
+ * The pill's background, border and corners belong to the *container*; the two
+ * children are transparent hit areas split by a hairline. That is what makes it
+ * read as a single split button: the accent colour is shared, and only the
+ * divider separates the two actions.
+ *
+ * Every override below names the child's role class as well as `.primary`.
+ * A shorter selector such as `.toolbar-open .button` ties with `.button.primary`
+ * and then loses to whichever rule appears later in this file — which is exactly
+ * how the right-hand corner once ended up square.
+ *
+ * `overflow` is deliberately left visible: the dropdown panel is a child, and
+ * clipping would cut it off at the toolbar's height.
+ */
+.toolbar-open {
+  display: flex;
+  align-items: stretch;
+  min-height: var(--control-height);
+  border-radius: var(--control-radius);
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  -webkit-app-region: no-drag;
+}
+
+/* Shared look for both halves; only the corners differ. */
+.toolbar-open > .button.primary.toolbar-open-main,
+.toolbar-open .history > .button.primary.history-trigger {
+  background: transparent;
+  border: 0;
+  color: #fff;
+  font-weight: 600;
+}
+
+/*
+ * A dark wash reads as "pressed into" the accent rather than as a new colour.
+ *
+ * `.button.primary` and `.button:hover` both set a background at the same
+ * specificity, so these selectors include both classes to win regardless of
+ * order.
+ */
+.toolbar-open > .button.primary.toolbar-open-main:hover,
+.toolbar-open .history > .button.primary.history-trigger:hover,
+.toolbar-open .history > .button.primary.history-trigger[aria-expanded='true'] {
+  background: rgba(0, 0, 0, 0.16);
+}
+
+/* Both corners round while there is nothing to butt against. */
+.toolbar-open > .button.primary.toolbar-open-main {
+  border-radius: var(--control-radius);
+}
+
+/* With a caret present, the outer corners stay round and the join is square. */
+.toolbar-open:has(.history-trigger) > .button.primary.toolbar-open-main {
+  border-radius: calc(var(--control-radius) - 1px) 0 0 calc(var(--control-radius) - 1px);
+}
+
+.toolbar-open .history > .button.primary.history-trigger {
+  display: grid;
+  place-items: center;
+  padding: 0 7px;
+  border-radius: 0 calc(var(--control-radius) - 1px) calc(var(--control-radius) - 1px) 0;
+  /* A divider instead of a gap: two halves of one control, not two buttons. */
+  border-left: 1px solid rgba(0, 0, 0, 0.24);
+}
+
+.history {
+  position: relative;
+  display: flex;
+}
+
+.history-caret {
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+
+/* The panel is wider than the gear's: each row shows a name and its full path. */
+.history-panel {
+  left: 0;
+  right: auto;
+  width: 340px;
+  padding: 8px;
+}
+
+.history-heading {
+  padding: 2px 8px 8px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 340px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.history-item {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  border-radius: 7px;
+}
+
+.history-item:hover {
+  background: rgba(255, 255, 255, 0.045);
+}
+
+/* The folder currently on screen is marked rather than hidden: seeing it in
+   context is useful, and removing it from the list would be surprising. */
+.history-item.current {
+  background: rgba(91, 140, 255, 0.12);
+}
+
+.history-open {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.history-name {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The path truncates from the start, so the leaf stays visible in a long path. */
+.history-path {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+.history-remove {
+  flex: 0 0 auto;
+  width: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  /* Revealed on hover or focus so the list does not look like a row of X's. */
+  opacity: 0;
+}
+
+.history-item:hover .history-remove,
+.history-remove:focus-visible {
+  opacity: 1;
+}
+
+.history-remove:hover {
+  background: rgba(255, 107, 107, 0.16);
+  color: var(--danger);
+}
+
+.history-remove svg {
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+
+.history-clear {
+  width: 100%;
+  margin-top: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.history-clear:hover {
+  background: rgba(255, 107, 107, 0.12);
+}
+
 /* ---------- dropdown menu ---------- */
 
 .menu {
@@ -191,6 +661,20 @@ body {
   stroke: currentColor;
   stroke-width: 1.4;
   stroke-linecap: round;
+}
+
+/*
+ * Solid icons.
+ *
+ * A gear at 15 px with a 1.4 px outline has sixteen tooth edges inside a
+ * 15 px box; they close up and the icon reads as a grey blob. Filling the shape
+ * and punching the bore keeps the teeth distinguishable at this size. `fill` is
+ * set on the element and the outline stroke switched off, because these paths
+ * carry their own interior hole via `fill-rule: evenodd`.
+ */
+.menu-icon-solid {
+  fill: currentColor;
+  stroke: none;
 }
 
 .menu-trigger[aria-expanded='true'] {
@@ -236,17 +720,249 @@ body {
   font: inherit;
 }
 
+/* A settings row that toggles rather than picks a value. */
+.settings-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  /* The whole row is the hit area, so the label text is as clickable as the box. */
+  padding: 2px 0;
+}
+
+.settings-check:hover {
+  color: var(--text);
+}
+
+.settings-check input {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* A row in the menu that opens something else rather than holding a value. */
+.settings-action {
+  justify-content: flex-start;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.settings-action:hover {
+  border-color: var(--line);
+  color: var(--text);
+}
+
+/* ---------- about ---------- */
+
+.about-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(6, 6, 9, 0.72);
+  backdrop-filter: blur(2px);
+}
+
+.about-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  /* Wide enough for a shortcut column, capped so it stays readable. */
+  width: min(560px, 100%);
+  max-height: min(760px, 100%);
+  overflow: auto;
+  padding: 22px 24px 18px;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6);
+}
+
+.about-header h2 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 600;
+}
+
+.about-version {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.about-description {
+  margin: 0;
+  color: var(--text-dim);
+}
+
+.about-source {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.about-source a {
+  color: var(--accent);
+  text-decoration: none;
+  /* Long URLs must not widen the dialog. */
+  overflow-wrap: anywhere;
+}
+
+.about-source a:hover {
+  text-decoration: underline;
+}
+
+.about-source a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.about-section h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.about-shortcuts,
+.about-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+}
+
+.about-shortcut {
+  display: grid;
+  /* Wide enough for "Shift + ↑ ↓ ← →" without wrapping mid-arrow. */
+  grid-template-columns: 170px 1fr;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.about-shortcut dt,
+.about-shortcut dd {
+  margin: 0;
+}
+
+.about-shortcut dd {
+  color: var(--text-dim);
+}
+
+.about-shortcuts kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.about-facts > div {
+  display: grid;
+  grid-template-columns: 170px 1fr;
+  gap: 10px;
+}
+
+.about-facts dt {
+  color: var(--text-dim);
+}
+
+.about-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.about-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ---------- drop target ---------- */
+
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 130;
+  display: grid;
+  place-items: center;
+  background: rgba(10, 12, 20, 0.7);
+  backdrop-filter: blur(2px);
+  /* Never intercept the drag: the events are handled on `window`, and a
+     pointer-events target here would cancel the drop it is advertising. */
+  pointer-events: none;
+}
+
+.drop-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 28px 44px;
+  border: 2px dashed var(--accent);
+  border-radius: 16px;
+  background: rgba(91, 140, 255, 0.08);
+  font-size: 14px;
+}
+
+.drop-icon svg {
+  width: 34px;
+  height: 34px;
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+
 /* ---------- buttons ---------- */
 
+/*
+ * One base for every control in the app. Height, radius, horizontal padding and
+ * font size all come from the `--control-*` tokens, so a button, a chip and a
+ * dropdown trigger line up exactly on the same baseline.
+ *
+ * `display: inline-flex` with centred content replaces the previous reliance on
+ * line-height: it makes an icon-plus-text button (the sort and history
+ * triggers) the same height as a text-only one, which a padding-only box cannot
+ * guarantee once an SVG is inside.
+ */
 .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  /* `min-height` rather than `height`, so a wrapped label can still grow. */
+  min-height: var(--control-height);
+  padding: 0 var(--control-padding-x);
   border: 1px solid var(--line);
   background: var(--bg-raised);
   color: var(--text);
-  padding: 6px 12px;
-  border-radius: 7px;
-  cursor: pointer;
+  border-radius: var(--control-radius);
   font: inherit;
-  transition: background 0.12s ease, border-color 0.12s ease;
+  font-size: var(--control-font);
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
 
 .button:hover {
@@ -272,6 +988,7 @@ body {
 .button.ghost {
   background: transparent;
 }
+
 
 .button.ghost.active,
 .button.chip.active {
@@ -339,6 +1056,14 @@ body {
 
 /* ---------- wall ---------- */
 
+/* Holds the stage and the scrollbar so the bar can sit over the wall's edge. */
+.wall-area {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+
 .stage {
   position: relative;
   flex: 1 1 auto;
@@ -351,6 +1076,85 @@ body {
 
 .stage:active {
   cursor: grabbing;
+}
+
+/* ---------- scrollbar ---------- */
+
+.scrollbar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  /* Over the wall, so it never takes layout width away from the photos. */
+  z-index: 15;
+  cursor: pointer;
+  /* The bar is a control inside a drag-to-pan stage. */
+  touch-action: none;
+}
+
+/* Only the thumb and the track's inner edge are painted, so the bar does not
+   read as a permanent stripe over the photos. */
+.scrollbar::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.scrollbar:hover::before,
+.scrollbar.dragging::before,
+.scrollbar:focus-visible::before {
+  opacity: 1;
+}
+
+.scrollbar-thumb {
+  position: absolute;
+  right: 3px;
+  width: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.28);
+  transition: background 0.15s ease, width 0.15s ease, right 0.15s ease;
+}
+
+.scrollbar:hover .scrollbar-thumb,
+.scrollbar.dragging .scrollbar-thumb {
+  width: 9px;
+  right: 2px;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.scrollbar:focus-visible {
+  outline: none;
+}
+
+.scrollbar:focus-visible .scrollbar-thumb {
+  background: var(--accent);
+}
+
+/*
+ * Date badge.
+ *
+ * Anchored to the thumb's mid-point rather than the pointer, so it does not
+ * jitter while the thumb is dragged.
+ */
+.scrollbar-label {
+  position: absolute;
+  right: 100%;
+  transform: translateY(-50%);
+  margin-right: 10px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(12, 12, 16, 0.92);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 .world {

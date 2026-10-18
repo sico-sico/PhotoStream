@@ -3,11 +3,13 @@ import type { Catalog } from '../messages'
 export const zhCN: Catalog = {
   'app.title': 'PhotoStream',
   'app.emptyTitle': 'PhotoStream',
-  'app.emptyBody': '选择一个存放 JPEG 照片的文件夹，即可开始浏览。',
+  'app.emptyBody': '选择一个存放 JPEG 照片的文件夹，或直接把文件夹拖到这个窗口，即可开始浏览。',
   'app.emptyAction': '打开文件夹…',
+  'app.dropHint': '拖入文件夹或照片以打开',
   'app.errorRetry': '换个文件夹试试',
 
   'toolbar.openFolder': '打开文件夹…',
+  'toolbar.openFolderHint': '打开一个文件夹，也可以把文件夹拖到窗口任意位置',
   'toolbar.scanning': '正在扫描…',
   'toolbar.noFolder': '未选择文件夹',
   'toolbar.layoutAria': '布局',
@@ -27,16 +29,26 @@ export const zhCN: Catalog = {
   'toolbar.language': '语言',
   'toolbar.settings': '设置',
 
+  'settings.recursive': '包含子文件夹中的照片',
+
+  'history.show': '最近的文件夹',
+  'history.title': '最近的文件夹',
+  'history.remove': '移除 {name}',
+  'history.clear': '全部清除',
+  'history.empty': '还没有历史文件夹',
+
   'filters.aria': '筛选',
   'filters.from': '开始日期',
   'filters.to': '结束日期',
   'filters.fileName': '文件名',
-  'filters.fileNamePlaceholder': '例如：京都',
+  'filters.fileNamePlaceholder': '例如：京都 或 IMG_*',
+  'filters.fileNameHint': '* 匹配任意多个字符，? 匹配单个字符；不含通配符时按包含匹配。',
   'filters.reset': '重置',
   'filters.range': '{min} → {max}',
   'filters.active': '已筛选',
 
   'wall.aria': '照片墙',
+  'wall.scrollbar': '滚动照片墙',
 
   'tile.noDate': '无拍摄日期',
   'tile.unknownDate': '—',
@@ -78,6 +90,24 @@ export const zhCN: Catalog = {
   'exif.software': '软件',
 
   'dialog.chooseFolder': '选择照片文件夹',
+
+  'about.title': '关于 PhotoStream',
+  'about.version': '版本 {version}',
+  'about.description': '面向 JPEG 文件夹的照片墙。扫描、拖动、缩放、查看细节。',
+  'about.runtime': '运行环境',
+  'about.electron': 'Electron {version}',
+  'about.chromium': 'Chromium {version}',
+  'about.source': '源代码',
+  'about.reportIssue': '反馈问题',
+  'about.dataLocation': '数据目录',
+  'about.shortcuts': '键盘快捷键',
+  'about.shortcutPan': '方向键 — 平移照片墙',
+  'about.shortcutPanLarge': 'Shift + 方向键 — 快速平移',
+  'about.shortcutFocus': 'Alt + 方向键 — 在照片间移动',
+  'about.shortcutViewer': 'Enter / 空格 — 打开选中的照片',
+  'about.shortcutClose': 'Esc — 关闭查看器或对话框',
+  'about.shortcutInfo': 'I — 在查看器中显示详细信息',
+  'about.close': '关闭',
 
   'window.minimize': '最小化',
   'window.maximize': '最大化',

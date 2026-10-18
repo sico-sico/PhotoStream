@@ -27,6 +27,16 @@ export interface ViewerProps {
   onPrev: () => void
   onNext: () => void
   onReveal: () => void
+  /**
+   * Start with the EXIF panel expanded.
+   *
+   * Set when the user opened this specific photo from outside the app — a drop,
+   * or Explorer's "Open with" — because in that case they pointed at *this file*
+   * and the file's details are as much of the answer as the picture is. Coming
+   * from the wall, clicking a tile is a request to look at the photo, and the
+   * panel would just be in the way.
+   */
+  initialInfoOpen?: boolean
 }
 
 /** Identity transform meaning "the photo exactly fits the stage". */
@@ -56,7 +66,15 @@ function toStagePoint(stage: HTMLElement, clientX: number, clientY: number): Pin
  * shown first and the original swapped in when it is ready. That removes the
  * white flash without an explicit loading spinner.
  */
-export function Viewer({ photo, previewUrl, onClose, onPrev, onNext, onReveal }: ViewerProps): React.JSX.Element {
+export function Viewer({
+  photo,
+  previewUrl,
+  onClose,
+  onPrev,
+  onNext,
+  onReveal,
+  initialInfoOpen = false
+}: ViewerProps): React.JSX.Element {
   const { t, locale } = useI18n()
   const [fullLoaded, setFullLoaded] = useState(false)
   const [transform, setTransform] = useState<Transform>(FIT_TRANSFORM)
@@ -65,7 +83,7 @@ export function Viewer({ photo, previewUrl, onClose, onPrev, onNext, onReveal }:
   /** Non-null while two or more fingers are down. */
   const [pinching, setPinching] = useState(false)
   /** Whether the EXIF detail panel is expanded. */
-  const [infoOpen, setInfoOpen] = useState(false)
+  const [infoOpen, setInfoOpen] = useState(initialInfoOpen)
   /** `null` until the read finishes; `{}` when the file carries no EXIF. */
   const [exif, setExif] = useState<RawExif | null>(null)
 
@@ -137,6 +155,18 @@ export function Viewer({ photo, previewUrl, onClose, onPrev, onNext, onReveal }:
     setTransform(FIT_TRANSFORM)
     setRotation(0)
   }, [photo.id])
+
+  /**
+   * Adopt the caller's panel preference when it changes.
+   *
+   * `useState(initialInfoOpen)` only reads its argument on mount, and the viewer
+   * is not remounted when it steps to another photo or when a new external open
+   * arrives. Without this, opening one file from Explorer and then a different
+   * one would leave the panel in whatever state the first launch left it.
+   */
+  useEffect(() => {
+    setInfoOpen(initialInfoOpen)
+  }, [initialInfoOpen, photo.id])
 
   /** Everything the bounds depend on, in the stage's content box. */
   const geometryFor = useCallback(

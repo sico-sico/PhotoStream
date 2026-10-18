@@ -538,6 +538,55 @@ describe('Viewer', () => {
       // The toolbar toggle keeps its identity and now reports the open state.
       expect(toggle).toHaveAttribute('aria-expanded', 'true')
     })
+
+    it('starts expanded when the photo was opened from outside the app', async () => {
+      // Dropping a picture, or Explorer's "Open with", points at one specific
+      // file: its details are part of what was asked for, so the panel opens
+      // with it instead of waiting for a click and a second round trip.
+      renderViewer({ initialInfoOpen: true })
+
+      expect(await screen.findByTestId('info-panel')).toBeInTheDocument()
+      expect(photoExif).toHaveBeenCalledWith('/photos/kyoto.jpg')
+    })
+
+    it('starts collapsed when the photo came from the wall', async () => {
+      // Clicking a tile is a request to look at the picture; the panel would
+      // cover it.
+      renderViewer({ initialInfoOpen: false })
+      expect(screen.queryByTestId('info-panel')).toBeNull()
+      expect(photoExif).not.toHaveBeenCalled()
+    })
+
+    it('adopts a later external open without a remount', async () => {
+      // `useState(initialInfoOpen)` only reads on mount, and stepping to another
+      // photo does not remount. Opening a second file from Explorer must still
+      // expand the panel for it.
+      const user = userEvent.setup()
+      const { rerender } = renderViewer({ initialInfoOpen: false })
+      expect(screen.queryByTestId('info-panel')).toBeNull()
+
+      await user.keyboard('i')
+      await screen.findByTestId('info-panel')
+      await user.keyboard('i')
+      expect(screen.queryByTestId('info-panel')).toBeNull()
+
+      rerender(
+        <I18nProvider preference="en" systemLocales={[]} onLocaleChange={() => {}}>
+          <Viewer
+            photo={{ ...photo, id: 'p2', path: '/photos/paris.jpg', name: 'paris.jpg' }}
+            previewUrl={undefined}
+            onClose={() => {}}
+            onPrev={() => {}}
+            onNext={() => {}}
+            onReveal={() => {}}
+            initialInfoOpen
+          />
+        </I18nProvider>
+      )
+
+      expect(await screen.findByTestId('info-panel')).toBeInTheDocument()
+      expect(photoExif).toHaveBeenCalledWith('/photos/paris.jpg')
+    })
   })
 
   it('localises the interface', () => {

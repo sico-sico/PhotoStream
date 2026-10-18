@@ -17,8 +17,7 @@ function photo(id: string, takenAt = '2020-01-01'): Photo {
   }
 }
 
-describe('wallReducer', () => {
-  describe('scanning', () => {
+describe('wallReducer', () => {  describe('scanning', () => {
     it('enters the scanning state and clears the previous result', () => {
       const state = reducer({ ...INITIAL_STATE, photos: [photo('old')] }, { type: 'scan/start', dir: '/new' })
       expect(state.status).toBe('scanning')
@@ -126,6 +125,64 @@ describe('wallReducer', () => {
     })
   })
 
+  describe('history', () => {
+    const open = (state: typeof INITIAL_STATE, dir: string): typeof INITIAL_STATE =>
+      reducer(state, { type: 'scan/success', dir, photos: [] })
+
+    it('records a successfully opened folder', () => {
+      expect(open(INITIAL_STATE, '/a').history).toEqual(['/a'])
+    })
+
+    it('records folders in most-recent-first order', () => {
+      const state = open(open(INITIAL_STATE, '/a'), '/b')
+      expect(state.history).toEqual(['/b', '/a'])
+    })
+
+    it('does not record a folder whose scan failed', () => {
+      // A missing folder must not keep reappearing in the menu as a dead entry.
+      const failed = reducer(INITIAL_STATE, { type: 'scan/error', message: 'gone' })
+      expect(failed.history).toEqual([])
+    })
+
+    it('records an empty folder, because it opened successfully', () => {
+      expect(open(INITIAL_STATE, '/empty').history).toEqual(['/empty'])
+    })
+
+    it('moves a reopened folder to the top instead of duplicating it', () => {
+      let state = open(open(INITIAL_STATE, '/a'), '/b')
+      state = open(state, '/a')
+      expect(state.history).toEqual(['/a', '/b'])
+    })
+
+    it('removes one folder', () => {
+      const state = reducer(open(open(INITIAL_STATE, '/a'), '/b'), { type: 'history/remove', dir: '/a' })
+      expect(state.history).toEqual(['/b'])
+    })
+
+    it('keeps the library open when its history entry is removed', () => {
+      // "Forget this folder" is about the menu, not about closing the wall.
+      const state = open(INITIAL_STATE, '/a')
+      const removed = reducer(state, { type: 'history/remove', dir: '/a' })
+      expect(removed.dir).toBe('/a')
+      expect(removed.status).toBe('ready')
+    })
+
+    it('clears every folder', () => {
+      const state = reducer(open(open(INITIAL_STATE, '/a'), '/b'), { type: 'history/clear' })
+      expect(state.history).toEqual([])
+    })
+
+    it('adopts a restored list as-is', () => {
+      const state = reducer(INITIAL_STATE, { type: 'history/set', history: ['/z', '/y'] })
+      expect(state.history).toEqual(['/z', '/y'])
+    })
+
+    it('validates a restored list', () => {
+      const state = reducer(INITIAL_STATE, { type: 'history/set', history: ['/a', '/a', ''] })
+      expect(state.history).toEqual(['/a'])
+    })
+  })
+
   describe('selection', () => {
     const order = ['a', 'b', 'c']
 
@@ -149,6 +206,34 @@ describe('wallReducer', () => {
       const closed = reducer(open, { type: 'viewer/close' })
       expect(closed.viewerOpen).toBe(false)
       expect(closed.selectedId).toBe('b')
+    })
+
+    it('expands the details panel only for an externally opened photo', () => {
+      // A drop or "Open with" points at one specific file, so its metadata is
+      // part of what was asked for.
+      const opened = reducer({ ...INITIAL_STATE, selectedId: 'b' }, { type: 'viewer/openWithInfo' })
+      expect(opened.viewerOpen).toBe(true)
+      expect(opened.viewerInfo).toBe(true)
+    })
+
+    it('does not expand the details panel for a tile click', () => {
+      const clicked = reducer(INITIAL_STATE, { type: 'selection/set', id: 'b' })
+      expect(clicked.viewerOpen).toBe(true)
+      expect(clicked.viewerInfo).toBe(false)
+    })
+
+    it('drops the external-open flag when stepping to another photo', () => {
+      // The flag describes one file, not the viewer: keeping it would open the
+      // panel on every subsequent photo.
+      const external: WallState = { ...INITIAL_STATE, selectedId: 'b', viewerOpen: true, viewerInfo: true }
+      const stepped = reducer(external, { type: 'selection/step', delta: 1, order: ['a', 'b', 'c'] })
+      expect(stepped.selectedId).toBe('c')
+      expect(stepped.viewerInfo).toBe(false)
+    })
+
+    it('clears the external-open flag when the viewer is reopened by a click', () => {
+      const external: WallState = { ...INITIAL_STATE, selectedId: 'b', viewerOpen: false, viewerInfo: true }
+      expect(reducer(external, { type: 'viewer/open' }).viewerInfo).toBe(false)
     })
 
     it('moves the focus without opening the viewer', () => {

@@ -30,6 +30,7 @@ interface FakeApi {
   loadSettings: ReturnType<typeof vi.fn>
   saveSettings: ReturnType<typeof vi.fn>
   openDirectory: ReturnType<typeof vi.fn>
+  openDropped: ReturnType<typeof vi.fn>
   pickDirectory: ReturnType<typeof vi.fn>
   thumbUrl: ReturnType<typeof vi.fn>
   requestThumbs: ReturnType<typeof vi.fn>
@@ -42,11 +43,13 @@ interface FakeApi {
   isMaximized: ReturnType<typeof vi.fn>
   onWindowState: ReturnType<typeof vi.fn>
   onPhotosChanged: ReturnType<typeof vi.fn>
+  onOpenExternal: ReturnType<typeof vi.fn>
   onThumbProgress: ReturnType<typeof vi.fn>
 }
 
 let api: FakeApi
 let photoListener: ((payload: unknown) => void) | null
+let externalListener: ((path: string) => void) | null
 let progressListener: ((payload: { done: number; total: number }) => void) | null
 /** Push a finished rendition into the hook, as the main process would. */
 let emitThumbReady: (entry: [string, string, ThumbLevel]) => void = () => {}
@@ -55,6 +58,7 @@ let readyQueue: Array<[string, string, ThumbLevel]> = []
 
 function installApi(settings: Partial<Settings> = {}): void {
   photoListener = null
+  externalListener = null
   progressListener = null
   readyQueue = []
   emitThumbReady = (entry) => readyQueue.push(entry)
@@ -63,6 +67,7 @@ function installApi(settings: Partial<Settings> = {}): void {
     loadSettings: vi.fn().mockResolvedValue({ ...DEFAULT_SETTINGS, ...settings }),
     saveSettings: vi.fn().mockImplementation(async (value: Settings) => value),
     openDirectory: vi.fn().mockResolvedValue({ dir: '/photos', photos: [], skipped: 0, durationMs: 1 }),
+    openDropped: vi.fn().mockResolvedValue({ dir: '/photos', photos: [], skipped: 0, durationMs: 1, photo: '' }),
     pickDirectory: vi.fn().mockResolvedValue('/photos'),
     thumbUrl: vi.fn().mockImplementation(async (p: Photo, level: string) => `pic://thumb/${p.id}-${level}.webp`),
     // Streams results back through `onThumbReady`, exactly like the real bridge.
@@ -85,11 +90,24 @@ function installApi(settings: Partial<Settings> = {}): void {
     close: vi.fn().mockResolvedValue(undefined),
     isMaximized: vi.fn().mockResolvedValue(false),
     onWindowState: vi.fn().mockReturnValue(() => {}),
-    appInfo: vi.fn().mockResolvedValue({ version: '0', dataDir: '', thumbCacheDir: '', systemLocales: [] }),
+    appInfo: vi.fn().mockResolvedValue({
+      version: '0',
+      dataDir: '',
+      thumbCacheDir: '',
+      systemLocales: [],
+      electron: '0',
+      chromium: '0'
+    }),
     onPhotosChanged: vi.fn().mockImplementation((listener: (payload: unknown) => void) => {
       photoListener = listener
       return () => {
         photoListener = null
+      }
+    }),
+    onOpenExternal: vi.fn().mockImplementation((listener: (path: string) => void) => {
+      externalListener = listener
+      return () => {
+        externalListener = null
       }
     }),
     onThumbProgress: vi.fn().mockImplementation((listener: (payload: { done: number; total: number }) => void) => {
@@ -132,7 +150,9 @@ describe('useWall', () => {
     it('reopens the last directory', async () => {
       installApi({ lastDir: '/last' })
       renderHook(() => useWall(viewport))
-      await waitFor(() => expect(api.openDirectory).toHaveBeenCalledWith('/last'))
+      // The preference travels with the call, so switching the subfolder setting
+      // and re-opening takes effect without restarting the app.
+      await waitFor(() => expect(api.openDirectory).toHaveBeenCalledWith('/last', false))
     })
 
     it('does not reopen anything when no directory was stored', async () => {
@@ -170,6 +190,84 @@ describe('useWall', () => {
       expect(result.current.state.status).toBe('ready')
       // Newest first: the wall opens on the most recent photo.
       expect(result.current.visiblePhotos.map((p) => p.id)).toEqual(['b', 'a'])
+    })
+
+    it('focuses and opens the photo a drop named', async () => {
+      api.openDropped.mockResolvedValue({
+        dir: '/photos',
+        // Ids are lower-cased paths in production; matching relies on that.
+        photos: [photo('/photos/b.jpg'), photo('/photos/a.jpg')],
+        skipped: 0,
+        durationMs: 5,
+        photo: '/photos/a.jpg'
+      })
+
+      const { result } = renderHook(() => useWall(viewport))
+      await act(async () => {
+        await result.current.openDropped('/photos/a.jpg')
+      })
+
+      // Dropping one picture means "show me this picture", not "show me the
+      // newest one in its folder".
+      expect(result.current.state.selectedId).toBe('/photos/a.jpg')
+      expect(result.current.openPhoto?.id).toBe('/photos/a.jpg')
+    })
+
+    it('does not open the viewer when a folder was dropped', async () => {
+      api.openDropped.mockResolvedValue({
+        dir: '/photos',
+        photos: [photo('b', '2020-01-01', 'b.jpg')],
+        skipped: 0,
+        durationMs: 5,
+        photo: ''
+      })
+
+      const { result } = renderHook(() => useWall(viewport))
+      await act(async () => {
+        await result.current.openDropped('/photos')
+      })
+
+      expect(result.current.state.status).toBe('ready')
+      expect(result.current.openPhoto).toBeNull()
+    })
+
+    it('ignores a dropped photo that is not in the scan result', async () => {
+      // The file can vanish between resolving and scanning; the wall should
+      // still open rather than fail on the missing tile.
+      api.openDropped.mockResolvedValue({
+        dir: '/photos',
+        photos: [photo('b', '2020-01-01', 'b.jpg')],
+        skipped: 0,
+        durationMs: 5,
+        photo: '/photos/gone.jpg'
+      })
+
+      const { result } = renderHook(() => useWall(viewport))
+      await act(async () => {
+        await result.current.openDropped('/photos/gone.jpg')
+      })
+
+      expect(result.current.state.status).toBe('ready')
+      expect(result.current.openPhoto).toBeNull()
+    })
+
+    it('opens a photo handed over by "Open with"', async () => {
+      api.openDropped.mockResolvedValue({
+        dir: '/photos',
+        photos: [photo('/photos/a.jpg')],
+        skipped: 0,
+        durationMs: 5,
+        photo: '/photos/a.jpg'
+      })
+
+      const { result } = renderHook(() => useWall(viewport))
+      await act(async () => {
+        externalListener?.('/photos/a.jpg')
+      })
+
+      // Same behaviour as a drop, by construction: the main process routes both
+      // through the same notification.
+      await waitFor(() => expect(result.current.openPhoto?.id).toBe('/photos/a.jpg'))
     })
 
     it('reorders the wall when the sort mode changes', async () => {

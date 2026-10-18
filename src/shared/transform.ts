@@ -363,6 +363,54 @@ export function clampViewerTransform(t: Transform, geometry: ViewerGeometry): Tr
 }
 
 /**
+ * Keep the wall inside its own bounds.
+ *
+ * The wall is a finite canvas, not an endless plane: it has a width and height
+ * computed from the photos. Without this clamp, dragging reveals empty space
+ * beyond the edge, which reads as a bug rather than as dragging.
+ *
+ * The rule is the same one the viewer uses, and it is what makes four-way
+ * dragging feel right:
+ * - when the wall is **larger** than the viewport on an axis, its edge is not
+ *   allowed to come inside the viewport, so you can pan to the last row or
+ *   column but never past it;
+ * - when it is **smaller**, that axis is centred and cannot be panned at all,
+ *   because there is nothing out of view to reach.
+ *
+ * @param worldWidth  the wall's laid-out width in world units
+ * @param worldHeight the wall's laid-out height in world units
+ */
+export function clampWallTransform(
+  t: Transform,
+  worldWidth: number,
+  worldHeight: number,
+  viewportWidth: number,
+  viewportHeight: number
+): Transform {
+  if (!(viewportWidth > 0) || !(viewportHeight > 0)) return t
+  if (!(worldWidth > 0) || !(worldHeight > 0)) return t
+
+  const scale = t.scale > 0 ? t.scale : 1
+
+  const axis = (value: number, viewport: number, world: number): number => {
+    const scaled = world * scale
+    if (scaled <= viewport) {
+      // Smaller than the window: centre it. Panning would only add empty space.
+      return (viewport - scaled) / 2
+    }
+    // Larger: the far edge must not come inside the viewport, and the near edge
+    // must not pass the origin.
+    return clamp(value, viewport - scaled, 0)
+  }
+
+  return {
+    scale: t.scale,
+    x: axis(t.x, viewportWidth, worldWidth),
+    y: axis(t.y, viewportHeight, worldHeight)
+  }
+}
+
+/**
  * Zoom to `nextScale` while keeping the stage point under (`pivotX`, `pivotY`)
  * pinned there.
  *

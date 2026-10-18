@@ -28,9 +28,21 @@ describe('sanitizeSettings', () => {
       layout: 'masonry' as const,
       sort: 'name-asc' as const,
       filters: { from: '2020-01-01', to: '', text: 'x' },
-      locale: 'fr'
+      locale: 'fr',
+      history: ['/photos'],
+      recursive: false
     }
     expect(sanitizeSettings(value)).toEqual(value)
+  })
+
+  it('defaults a missing history to an empty list', () => {
+    // Settings files written before recent folders shipped have no `history`.
+    expect(sanitizeSettings({ lastDir: '/photos' }).history).toEqual([])
+  })
+
+  it('drops an invalid history list rather than trusting it', () => {
+    expect(sanitizeSettings({ history: 'not-an-array' }).history).toEqual([])
+    expect(sanitizeSettings({ history: ['/a', 7, null] }).history).toEqual(['/a'])
   })
 
   it('falls back for an unknown layout', () => {
@@ -152,7 +164,9 @@ describe('saveSettings', () => {
       layout: 'masonry' as const,
       sort: 'taken-asc' as const,
       filters: { from: '2020-01-01', to: '2020-12-31', text: 'kyoto' },
-      locale: 'fr'
+      locale: 'fr',
+      history: ['/photos', '/photos/trip'],
+      recursive: true
     }
     await saveSettings(dir, settings)
 

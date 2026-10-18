@@ -1,6 +1,8 @@
 import type { LayoutMode, SortMode } from '@shared/types'
 import type { MessageKey } from '@shared/i18n/messages'
 import { useI18n } from '../i18n/context'
+import { HistoryMenu } from './HistoryMenu'
+import { Logo } from './Logo'
 import { Menu } from './Menu'
 import { SettingsMenuContent } from './SettingsMenuContent'
 import { SortPicker } from './SortPicker'
@@ -14,10 +16,19 @@ export interface ToolbarProps {
   busy: boolean
   visibleCount: number
   totalCount: number
+  /** Recent folders, newest first. */
+  history: readonly string[]
+  /** Whether subfolder JPEGs are included. */
+  recursive: boolean
+  onRecursiveChange: (recursive: boolean) => void
   onChooseFolder: () => void
+  onOpenHistory: (dir: string) => void
+  onRemoveHistory: (dir: string) => void
+  onClearHistory: () => void
   onLayoutChange: (layout: LayoutMode) => void
   onSortChange: (sort: SortMode) => void
   onToggleFilters: () => void
+  onAbout: () => void
 }
 
 const LAYOUTS: ReadonlyArray<{ value: LayoutMode; label: MessageKey; hint: MessageKey }> = [
@@ -34,18 +45,47 @@ export function Toolbar({
   busy,
   visibleCount,
   totalCount,
+  history,
+  recursive,
+  onRecursiveChange,
   onChooseFolder,
+  onOpenHistory,
+  onRemoveHistory,
+  onClearHistory,
   onLayoutChange,
   onSortChange,
-  onToggleFilters
+  onToggleFilters,
+  onAbout
 }: ToolbarProps): React.JSX.Element {
   const { t } = useI18n()
 
   return (
     <header className="toolbar">
-      <button type="button" className="button primary" onClick={onChooseFolder}>
-        {t('toolbar.openFolder')}
-      </button>
+      <Logo />
+
+      <div className="toolbar-open">
+        <button
+          type="button"
+          className="button primary toolbar-open-main"
+          // The button is the discoverable action; the drop gesture has no
+          // affordance of its own, so it is advertised here.
+          title={t('toolbar.openFolderHint')}
+          onClick={onChooseFolder}
+        >
+          {t('toolbar.openFolder')}
+        </button>
+        {/*
+         * The caret only appears once there is something behind it; a history
+         * control that opens an empty list is worse than no control at all.
+         */}
+        <HistoryMenu
+          history={history}
+          current={dir}
+          onOpen={onOpenHistory}
+          onRemove={onRemoveHistory}
+          onClear={onClearHistory}
+        />
+      </div>
 
       <div className="dir-label" title={dir} dir="auto">
         {busy ? t('toolbar.scanning') : dir || t('toolbar.noFolder')}
@@ -98,7 +138,14 @@ export function Toolbar({
        * for the same reason.
        */}
       <Menu label={t('toolbar.settings')} icon={<GearIcon />}>
-        {(close) => <SettingsMenuContent onDone={close} />}
+        {(close) => (
+          <SettingsMenuContent
+            onDone={close}
+            onAbout={onAbout}
+            recursive={recursive}
+            onRecursiveChange={onRecursiveChange}
+          />
+        )}
       </Menu>
 
       <WindowControls />
@@ -106,12 +153,34 @@ export function Toolbar({
   )
 }
 
-/** A gear, drawn as a path so it needs no icon font or extra asset. */
+/**
+ * A gear, drawn as a path so it needs no icon font or extra asset.
+ *
+ * The previous version was a circle with eight straight lines radiating out of
+ * it — which is the conventional drawing of a *sun*, not a cog: a gear's teeth
+ * are notches cut into its rim, not spikes away from it. This is a real gear
+ * silhouette: eight trapezoidal teeth on a 5.5/7.2 radius rim, plus a bore.
+ *
+ * It is filled rather than stroked. At the 15 px the toolbar renders, a 1.4 px
+ * outline around sixteen tooth edges closes up into a grey blob; a solid shape
+ * with a hole keeps the teeth legible. Both subpaths are in one `<path>` with
+ * `evenodd`, so the bore is a genuine hole and the icon works over any
+ * background instead of faking it with a background-coloured circle.
+ *
+ * Coordinates are generated, not hand-written, so the teeth stay even. The
+ * generator's parameters are quoted so the shape can be retuned without
+ * reverse-engineering the path:
+ *   centre 8,8 · teeth 8 · tip radius 7.2 · root radius 5.5 · half-tooth 0.22 rad
+ */
 function GearIcon(): React.JSX.Element {
   return (
-    <svg className="menu-icon" viewBox="0 0 16 16" aria-hidden="true">
-      <circle cx="8" cy="8" r="2.6" />
-      <path d="M8 1.4v1.7M8 12.9v1.7M1.4 8h1.7M12.9 8h1.7M3.3 3.3l1.2 1.2M11.5 11.5l1.2 1.2M12.7 3.3l-1.2 1.2M4.5 11.5l-1.2 1.2" />
+    <svg className="menu-icon menu-icon-solid" viewBox="0 0 16 16" aria-hidden="true">
+      {/* One path with two subpaths: `evenodd` makes the bore a real hole.
+          Splitting them into separate paths would fill the bore instead. */}
+      <path
+        fillRule="evenodd"
+        d="M13.16 6.10L15.03 6.43L15.03 9.57L13.16 9.90L12.99 10.31L14.08 11.86L11.86 14.08L10.31 12.99L9.90 13.16L9.57 15.03L6.43 15.03L6.10 13.16L5.69 12.99L4.14 14.08L1.92 11.86L3.01 10.31L2.84 9.90L0.97 9.57L0.97 6.43L2.84 6.10L3.01 5.69L1.92 4.14L4.14 1.92L5.69 3.01L6.10 2.84L6.43 0.97L9.57 0.97L9.90 2.84L10.31 3.01L11.86 1.92L14.08 4.14L12.99 5.69Z M8 5.9A2.1 2.1 0 1 0 8 10.1A2.1 2.1 0 1 0 8 5.9Z"
+      />
     </svg>
   )
 }

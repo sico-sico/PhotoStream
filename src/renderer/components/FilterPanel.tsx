@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useId, useMemo } from 'react'
 import type { Filters } from '@shared/types'
 import { dateRange } from '@shared/filters'
 import type { Photo } from '@shared/types'
@@ -25,6 +25,8 @@ export function FilterPanel({ filters, photos, onChange, onReset }: FilterPanelP
   const { t } = useI18n()
   const range = useMemo(() => dateRange(photos), [photos])
   const active = Boolean(filters.from || filters.to || filters.text)
+  // Generated rather than a fixed id, so two panels on one page cannot collide.
+  const hintId = useId()
 
   return (
     <section className="filter-panel" aria-label={t('filters.aria')}>
@@ -54,10 +56,24 @@ export function FilterPanel({ filters, photos, onChange, onReset }: FilterPanelP
           <input
             type="search"
             placeholder={t('filters.fileNamePlaceholder')}
+            title={t('filters.fileNameHint')}
+            aria-describedby={hintId}
             value={filters.text}
             onChange={(event) => onChange({ ...filters, text: event.target.value })}
           />
         </label>
+        {/**
+         * The hint lives *outside* the label on purpose.
+         *
+         * A `<label>` contributes all of its text to the input's accessible
+         * name, so nesting this span inside would rename the field to
+         * "File name Use * for any characters…" and break every lookup by
+         * label. As a sibling referenced by `aria-describedby` it is exposed as
+         * a description instead, which is what it actually is.
+         */}
+        <span className="visually-hidden" id={hintId}>
+          {t('filters.fileNameHint')}
+        </span>
         <button type="button" className="button ghost" onClick={onReset} disabled={!active}>
           {t('filters.reset')}
         </button>

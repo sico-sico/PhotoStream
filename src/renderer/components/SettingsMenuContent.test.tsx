@@ -9,9 +9,18 @@ function renderContent(
   props: Partial<React.ComponentProps<typeof SettingsMenuContent>> = {},
   locale = 'en'
 ): ReturnType<typeof render> {
+  // Defaults first, overrides after: `Partial` makes every prop optional, so
+  // spreading first would let `undefined` overwrite a required value.
+  const merged = {
+    onDone: () => {},
+    onAbout: () => {},
+    recursive: false,
+    onRecursiveChange: () => {},
+    ...props
+  }
   return render(
     <I18nProvider preference={locale} systemLocales={[]} onLocaleChange={() => {}}>
-      <SettingsMenuContent onDone={() => {}} {...props} />
+      <SettingsMenuContent {...merged} />
     </I18nProvider>
   )
 }
@@ -41,5 +50,41 @@ describe('SettingsMenuContent', () => {
     renderContent({}, 'zh-CN')
     // The row heading, not just the select's accessible name.
     expect(screen.getByText('语言')).toBeInTheDocument()
+  })
+
+  it('offers the subfolder toggle, off by default', () => {
+    renderContent()
+    expect(screen.getByRole('checkbox', { name: /subfolders/i })).not.toBeChecked()
+  })
+
+  it('reflects an enabled subfolder setting', () => {
+    renderContent({ recursive: true })
+    expect(screen.getByRole('checkbox', { name: /subfolders/i })).toBeChecked()
+  })
+
+  it('reports the new subfolder value', async () => {
+    const user = userEvent.setup()
+    const onRecursiveChange = vi.fn()
+    renderContent({ onRecursiveChange })
+
+    await user.click(screen.getByRole('checkbox', { name: /subfolders/i }))
+    expect(onRecursiveChange).toHaveBeenCalledWith(true)
+  })
+
+  it('does not close the menu when the subfolder toggle changes', async () => {
+    // The re-scan is visible behind the panel, so the user can turn it on, watch
+    // the count change, and turn it back off. Closing after one click would make
+    // that impossible.
+    const user = userEvent.setup()
+    const onDone = vi.fn()
+    renderContent({ onDone })
+
+    await user.click(screen.getByRole('checkbox', { name: /subfolders/i }))
+    expect(onDone).not.toHaveBeenCalled()
+  })
+
+  it('translates the subfolder label', () => {
+    renderContent({}, 'zh-CN')
+    expect(screen.getByRole('checkbox', { name: '包含子文件夹中的照片' })).toBeInTheDocument()
   })
 })

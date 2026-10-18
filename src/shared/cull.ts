@@ -60,6 +60,63 @@ export function worldRect(
 }
 
 /**
+ * How many screens of vertical margin to prefetch around a scroll target.
+ *
+ * The scrollbar can land anywhere, so the useful question is "what will be on
+ * screen once the jump finishes", plus enough overlap to cover the animation and
+ * a small overshoot. One screen either side matches `CULL_MARGIN`'s intent
+ * without asking for a whole year of photos.
+ */
+export const PREFETCH_SCREENS = 1
+
+/**
+ * Ids to prefetch for a pending scroll to `targetY`.
+ *
+ * Dragging the scrollbar jumps the view by thousands of pixels at once, which is
+ * exactly the case the viewport-driven prefetch cannot anticipate: by the time
+ * the new tiles mount, their thumbnails have only just been requested, so a
+ * deliberate jump across a year of photos lands on a wall of empty
+ * placeholders.
+ *
+ * This returns the ids around the *destination* rather than around the current
+ * view, so the request can be in flight while the animation runs. It is
+ * deliberately a superset-friendly band rather than a precise rectangle: extra
+ * ids only cost a slightly larger batch, while a missing id is visible.
+ *
+ * @param targetY world-space `y` of the row that will be at the top of the window
+ * @param viewportHeight window height in CSS pixels
+ * @param scale current zoom, so the band covers the same amount of screen
+ */
+export function prefetchIdsForScroll(
+  layout: Pick<LayoutResult, 'items'>,
+  targetY: number,
+  viewportWidth: number,
+  viewportHeight: number,
+  scale: number,
+  limit = MAX_MOUNTED_TILES
+): string[] {
+  if (!(viewportHeight > 0) || !(viewportWidth > 0)) return []
+
+  const effectiveScale = scale > 0 ? scale : 1
+  // Screen height expressed in world units, then padded by whole screens.
+  const screenWorld = viewportHeight / effectiveScale
+  const margin = screenWorld * PREFETCH_SCREENS
+
+  const top = targetY - margin
+  const bottom = targetY + screenWorld + margin
+
+  const ids: string[] = []
+  for (const item of layout.items) {
+    if (item.y + item.h < top) continue
+    // Items are in layout order, so once past the band nothing later can match.
+    if (item.y > bottom) break
+    ids.push(item.id)
+    if (ids.length >= limit) break
+  }
+  return ids
+}
+
+/**
  * Select the items intersecting the visible rectangle.
  *
  * @param margin screen-space margin around the viewport, in CSS pixels

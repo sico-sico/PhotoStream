@@ -1,6 +1,7 @@
 import type { Filters, LayoutMode, Photo, SortMode } from '@shared/types'
 import { DEFAULT_SORT, EMPTY_FILTERS } from '@shared/types'
 import { sortPhotos } from '@shared/photoStore'
+import { addToHistory, removeFromHistory, sanitizeHistory } from '@shared/history'
 
 /**
  * Wall state.
@@ -25,12 +26,30 @@ export interface WallState {
    * tying the two together made that impossible after Escape closed the viewer.
    */
   viewerOpen: boolean
+  /**
+   * Whether the open viewer should start with the EXIF panel expanded.
+   *
+   * True only when the user opened one specific file from outside the app (a
+   * drop, or Explorer's "Open with"), where the file's details are part of what
+   * they asked for. Reset whenever the viewer is opened another way.
+   */
+  viewerInfo: boolean
   status: 'idle' | 'scanning' | 'ready' | 'error'
   /** Photos scanned so far, for the progress indicator. */
   scanDone: number
   errorMessage: string
   /** Persisted locale preference; `''` means follow the system. */
   locale: string
+  /**
+   * Recently opened folders, most recent first.
+   *
+   * Mirrored in reducer state rather than read from `window.photoStream` on
+   * demand so that opening a folder updates the menu synchronously, and so the
+   * list survives the same restore/persist cycle as every other preference.
+   */
+  history: string[]
+  /** Whether the current library includes photos in subfolders. */
+  recursive: boolean
 }
 
 export const INITIAL_STATE: WallState = {
@@ -41,10 +60,13 @@ export const INITIAL_STATE: WallState = {
   sort: DEFAULT_SORT,
   selectedId: null,
   viewerOpen: false,
+  viewerInfo: false,
   status: 'idle',
   scanDone: 0,
   errorMessage: '',
-  locale: ''
+  locale: '',
+  history: [],
+  recursive: false
 }
 
 export type WallAction =
@@ -57,10 +79,16 @@ export type WallAction =
   | { type: 'layout/set'; layout: LayoutMode }
   | { type: 'sort/set'; sort: SortMode }
   | { type: 'locale/set'; locale: string }
+  | { type: 'history/add'; dir: string }
+  | { type: 'history/set'; history: string[] }
+  | { type: 'history/remove'; dir: string }
+  | { type: 'history/clear' }
+  | { type: 'recursive/set'; recursive: boolean }
   | { type: 'selection/set'; id: string | null }
   | { type: 'selection/focus'; id: string | null }
   | { type: 'selection/step'; delta: number; order: readonly string[] }
   | { type: 'viewer/open' }
+  | { type: 'viewer/openWithInfo' }
   | { type: 'viewer/close' }
 
 export function reducer(state: WallState, action: WallAction): WallState {
@@ -83,7 +111,12 @@ export function reducer(state: WallState, action: WallAction): WallState {
         photos: sortPhotos(action.photos, state.sort),
         status: 'ready',
         scanDone: action.photos.length,
-        errorMessage: ''
+        errorMessage: '',
+        // Recorded here rather than at each call site, so the folder picker, a
+        // drop and a restore-from-history all produce the same entry. An empty
+        // scan still counts: the folder was opened successfully, it just holds
+        // no JPEGs.
+        history: addToHistory(state.history, action.dir)
       }
 
     case 'scan/error':
@@ -113,12 +146,39 @@ export function reducer(state: WallState, action: WallAction): WallState {
     case 'locale/set':
       return { ...state, locale: action.locale }
 
+    case 'history/add':
+      // Re-opening a folder moves it to the top instead of duplicating it.
+      return { ...state, history: addToHistory(state.history, action.dir) }
+
+    case 'history/set':
+      // Used when restoring from disk: the stored order is already the
+      // history, so it must be adopted as-is rather than replayed entry by
+      // entry (which would reverse it, and cap it differently).
+      return { ...state, history: sanitizeHistory(action.history) }
+
+    case 'history/remove':
+      return { ...state, history: removeFromHistory(state.history, action.dir) }
+
+    case 'history/clear':
+      return { ...state, history: [] }
+
+    case 'recursive/set':
+      // Only the preference changes here; the caller re-opens the folder, since
+      // the photo list itself is produced by the main process.
+      return { ...state, recursive: action.recursive }
+
     case 'selection/set':
       // Focusing a photo also opens it: that is what clicking a tile means.
-      return { ...state, selectedId: action.id, viewerOpen: action.id !== null }
+      // `viewerInfo` is cleared: a click on the wall asks to *look* at a photo,
+      // not to inspect its file details.
+      return { ...state, selectedId: action.id, viewerOpen: action.id !== null, viewerInfo: false }
 
     case 'viewer/open':
-      return state.selectedId ? { ...state, viewerOpen: true } : state
+      return state.selectedId ? { ...state, viewerOpen: true, viewerInfo: false } : state
+
+    case 'viewer/openWithInfo':
+      // Only used when the user opened this exact file from outside the app.
+      return state.selectedId ? { ...state, viewerOpen: true, viewerInfo: true } : state
 
     case 'viewer/close':
       // The photo stays focused so the arrow keys keep working on the wall.
@@ -135,7 +195,10 @@ export function reducer(state: WallState, action: WallAction): WallState {
       // With nothing selected, the first step opens the first photo.
       const next = current === -1 ? (delta > 0 ? 0 : order.length - 1) : current + delta
       const clamped = Math.min(Math.max(next, 0), order.length - 1)
-      return { ...state, selectedId: order[clamped], viewerOpen: true }
+      // Stepping moves to a different photo, whose details the user did not ask
+      // for: keep whatever the panel state is, but drop the "opened externally"
+      // intent so it does not re-open on every subsequent photo.
+      return { ...state, selectedId: order[clamped], viewerOpen: true, viewerInfo: false }
     }
 
     default:
