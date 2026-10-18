@@ -863,6 +863,18 @@ body {
   color: var(--text);
 }
 
+/*
+ * A footnote under the licence rows.
+ *
+ * Sits closer to the rows above than to what follows, because it qualifies
+ * them: the `-10px` cancels most of the dialog's 16px gap on that side only.
+ */
+.about-note {
+  margin: -10px 0 0;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
 .about-section h3 {
   margin: 0 0 8px;
   font-size: 12px;

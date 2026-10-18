@@ -57,6 +57,22 @@ async function pruneBundle(portable) {
   return removed
 }
 
+/**
+ * Ship the license files at the portable root, next to Electron's own.
+ *
+ * They cannot stay only inside the ASAR: a user has to be able to read the
+ * notices without unpacking the bundle, and the LGPL requires the libvips
+ * license and source information to travel with the binary. Electron already
+ * places its own `LICENSE` and `LICENSES.chromium.html` at this level, so the
+ * project's MIT text is copied under a distinct name rather than overwriting
+ * it.
+ */
+async function shipNotices(portable) {
+  await cp(join(root, 'LICENSE'), join(portable, 'LICENSE-PhotoStream.txt'))
+  await cp(join(root, 'THIRD-PARTY-NOTICES.md'), join(portable, 'THIRD-PARTY-NOTICES.md'))
+  await cp(join(root, 'licenses'), join(portable, 'licenses'), { recursive: true })
+}
+
 async function main() {
   // Start from a clean slate so a stale bundle cannot be mistaken for a new one.
   await rm(releaseDir, { recursive: true, force: true })
@@ -86,6 +102,10 @@ async function main() {
       /^\/playwright-report($|\/)/,
       /^\/coverage($|\/)/,
       /^\/docs($|\/)/,
+      // Copied to the portable root by `shipNotices`, so keeping a second copy
+      // inside the ASAR would only add weight.
+      /^\/licenses($|\/)/,
+      /^\/THIRD-PARTY-NOTICES\.md$/,
       /^\/[^/]*\.(md|log)$/,
       /^\/(vitest|playwright|electron\.vite)\.config\.ts$/,
       /^\/tsconfig.*\.json$/,
@@ -104,6 +124,8 @@ async function main() {
   const removed = await pruneBundle(portable)
   if (removed.length > 0) console.log(`Pruned ${removed.length} unused Chromium locale pack(s).`)
 
+  await shipNotices(portable)
+
   // Ship the notes next to the exe: the portable build has no installer to
   // explain where the data lives.
   const readme = join(portable, 'README.txt')
@@ -119,7 +141,14 @@ async function main() {
       '  thumbs/        - cached thumbnails (safe to delete)',
       '',
       'To move the app, copy or move the whole folder and keep the "Data"',
-      'folder with it. Deleting it resets the app to a fresh state.'
+      'folder with it. Deleting it resets the app to a fresh state.',
+      '',
+      'Licenses:',
+      '  LICENSE-PhotoStream.txt  - PhotoStream is MIT licensed',
+      '  THIRD-PARTY-NOTICES.md   - bundled components and their licenses',
+      '  licenses/                - full license texts',
+      '  LICENSE                  - Electron',
+      '  LICENSES.chromium.html   - Chromium and its dependencies'
     ].join('\n')
   )
 

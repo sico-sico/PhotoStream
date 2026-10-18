@@ -47,7 +47,7 @@ PhotoStream 把一个文件夹的照片（JPEG / PNG）铺成一面可以拖动�
 
 ## 安装与运行
 
-从 [Releases](https://github.com/sico-sico/PhotoStream/releases) 下载 `PhotoStream-0.2.0-portable-win-x64.zip`，解压后双击 `PhotoStream.exe`，无需安装。
+从 [Releases](https://github.com/sico-sico/PhotoStream/releases) 下载 `PhotoStream-0.2.1-portable-win-x64.zip`，解压后双击 `PhotoStream.exe`，无需安装。
 
 应用把数据写在自己旁边的 `PhotoStreamData/` 里，整个文件夹可以移到别处或 U 盘。
 
@@ -84,8 +84,8 @@ npm run verify       # typecheck + 覆盖率测试 + 端到端测试
 `.github/workflows/release.yml` 由 tag 触发：
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.2.1
+git push origin v0.2.1
 ```
 
 它会重跑类型检查和单元测试，然后打包，用 `smoke:portable` 启动打包好的 exe 验证 asar 路径、解包的原生模块和 `pic://` 协议，最后把 zip 附到 Release。
@@ -216,7 +216,9 @@ New-ItemProperty -Path 'HKCU:\Software\Classes\.jpg\OpenWithProgids' `
 
 ## 许可
 
-MIT
+[MIT](./LICENSE)。
+
+打包产物附带的第三方组件与许可证见 [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md)。其中 `sharp` 内置的 libvips 是 **LGPL-3.0-or-later**，以独立 DLL 动态链接并放在 asar 之外，用户可自行替换；许可证全文与源码获取方式见 [`licenses/`](./licenses) 和上述声明。
 
 ## 关于作者
 

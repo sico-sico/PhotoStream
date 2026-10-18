@@ -17,6 +17,16 @@ const REPOSITORY_URL = 'https://github.com/sico-sico/PhotoStream'
 const REPOSITORY_LABEL = 'sico-sico/PhotoStream'
 
 /**
+ * Licence documents, on the default branch.
+ *
+ * The portable build also ships these files next to the exe (see its
+ * `README.txt`), but linking to the repository keeps a single source of truth and
+ * works in development, where no packaged copy exists.
+ */
+const LICENSE_URL = `${REPOSITORY_URL}/blob/main/LICENSE`
+const NOTICES_URL = `${REPOSITORY_URL}/blob/main/THIRD-PARTY-NOTICES.md`
+
+/**
  * About dialog: version, runtime and the shortcuts worth learning.
  *
  * The shortcut list lives here rather than in a separate help screen because
@@ -108,6 +118,27 @@ export function AboutDialog({ onClose }: AboutDialogProps): React.JSX.Element {
             {REPOSITORY_LABEL}
           </a>
         </p>
+
+        {/**
+         * Licence terms.
+         *
+         * Not boilerplate: the application bundles libvips under the LGPL, and a
+         * reader is entitled to know that and where the notices live without
+         * unpacking the portable folder.
+         */}
+        <p className="about-source">
+          <span>{t('about.license')}</span>
+          <a href={LICENSE_URL} target="_blank" rel="noreferrer noopener" dir="ltr">
+            {t('about.licenseValue')}
+          </a>
+        </p>
+        <p className="about-source">
+          <span>{t('about.notices')}</span>
+          <a href={NOTICES_URL} target="_blank" rel="noreferrer noopener" dir="ltr">
+            {t('about.noticesValue')}
+          </a>
+        </p>
+        <p className="about-note">{t('about.licenseNote')}</p>
 
         {/**
          * Attribution.

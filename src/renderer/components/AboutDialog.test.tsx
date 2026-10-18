@@ -53,6 +53,31 @@ describe('AboutDialog', () => {
     expect(link).toHaveAttribute('href', 'https://github.com/sico-sico/PhotoStream')
   })
 
+  it('states the licence and links to its text', () => {
+    renderDialog()
+    expect(screen.getByText('License')).toBeInTheDocument()
+    const link = screen.getByRole('link', { name: 'MIT' })
+    expect(link).toHaveAttribute('href', 'https://github.com/sico-sico/PhotoStream/blob/main/LICENSE')
+    // Same reason as the repository link: only `_blank` reaches the browser.
+    expect(link).toHaveAttribute('target', '_blank')
+  })
+
+  it('links to the third-party notices and names the copyleft component', () => {
+    // libvips is LGPL: the about box has to say so, not bury it in a file.
+    renderDialog()
+    const link = screen.getByRole('link', { name: 'THIRD-PARTY-NOTICES.md' })
+    expect(link).toHaveAttribute('href', 'https://github.com/sico-sico/PhotoStream/blob/main/THIRD-PARTY-NOTICES.md')
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(screen.getByText(/libvips \(LGPL-3\.0-or-later\)/)).toBeInTheDocument()
+  })
+
+  it('translates the licence rows', () => {
+    renderDialog('zh-CN')
+    expect(screen.getByText('许可协议')).toBeInTheDocument()
+    expect(screen.getByText('第三方组件许可')).toBeInTheDocument()
+    expect(screen.getByText(/libvips（LGPL-3\.0-or-later）/)).toBeInTheDocument()
+  })
+
   it('credits the model that wrote the code', () => {
     // Honest attribution for a codebase generated end to end, and a hint about
     // whose quirks a bug report is dealing with.
