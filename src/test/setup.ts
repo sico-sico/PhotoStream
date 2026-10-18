@@ -69,7 +69,14 @@ if (hasDom) {
       unobserve(): void {}
       disconnect(): void {}
     }
-    Object.defineProperty(globalThis, 'ResizeObserver', { value: ResizeObserverStub, writable: true })
+    // Configurable so a test can swap in an observer that actually delivers
+    // notifications: the real one always sends an initial entry on `observe()`,
+    // and bugs caused by that delivery are invisible to a silent stub.
+    Object.defineProperty(globalThis, 'ResizeObserver', {
+      value: ResizeObserverStub,
+      writable: true,
+      configurable: true
+    })
   }
 
   if (!('matchMedia' in globalThis)) {

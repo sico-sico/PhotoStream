@@ -115,6 +115,73 @@ describe('RandomShow', () => {
     expect(shown[0].id).toMatch(/^p\d+$/)
   })
 
+  /**
+   * The ring must not be re-dealt by anything except entering the show.
+   *
+   * `ResizeObserver` delivers a notification right after `observe()`, so the
+   * overlay legitimately measures twice on mount. When the measurement was
+   * stored unconditionally the second delivery changed `viewport`'s identity
+   * without changing its value, re-ran the start effect and drew a completely
+   * different set of photos — visible as the ring flashing twice on open, and as
+   * a rapid reshuffle whenever the window was still settling.
+   */
+  it('deals one ring even when the window is measured repeatedly', async () => {
+    const callbacks: Array<() => void> = []
+    class RecordingObserver {
+      constructor(callback: () => void) {
+        callbacks.push(callback)
+      }
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    }
+    // The global stub installed by the test setup is not configurable, so it is
+    // replaced through the same descriptor rather than with `stubGlobal`.
+    const original = Object.getOwnPropertyDescriptor(globalThis, 'ResizeObserver')
+    Object.defineProperty(globalThis, 'ResizeObserver', {
+      value: RecordingObserver,
+      writable: true,
+      configurable: true
+    })
+
+    try {
+      renderShow()
+      await waitFor(() => expect(screen.getAllByTestId('random-thumb').length).toBeGreaterThan(0))
+      const first = screen.getByTestId('random-centre').getAttribute('aria-label')
+      const firstRing = screen.getAllByTestId('random-thumb').map((el) => el.getAttribute('data-photo-id'))
+
+      // The same size, delivered again, which is what the observer does on
+      // subscribe and on every layout pass that does not move the box.
+      for (const callback of callbacks) act(() => callback())
+      for (const callback of callbacks) act(() => callback())
+
+      expect(screen.getByTestId('random-centre').getAttribute('aria-label')).toBe(first)
+      expect(screen.getAllByTestId('random-thumb').map((el) => el.getAttribute('data-photo-id'))).toEqual(firstRing)
+    } finally {
+      Object.defineProperty(globalThis, 'ResizeObserver', original!)
+    }
+  })
+
+  it('keeps the ring playing when the photo pool is replaced', async () => {
+    // A watcher event or a re-scan hands over a new array for the same photos.
+    // Re-seeding on that would empty and refill the screen for an event the user
+    // did not ask for; the new pool is for the next turnover.
+    const { rerender } = renderShow()
+    await waitFor(() => expect(screen.getAllByTestId('random-thumb').length).toBeGreaterThan(0))
+    const centreBefore = screen.getByTestId('random-centre').getAttribute('aria-label')
+    const ringBefore = screen.getAllByTestId('random-thumb').map((el) => el.getAttribute('data-photo-id'))
+
+    const replacement = POOL.map((item) => ({ ...item }))
+    rerender(
+      <I18nProvider preference="en" systemLocales={[]} onLocaleChange={() => {}}>
+        <RandomShow pool={replacement} urlMapsByLevel={urlMapsByLevel} onShow={() => {}} onClose={() => {}} />
+      </I18nProvider>
+    )
+
+    expect(screen.getByTestId('random-centre').getAttribute('aria-label')).toBe(centreBefore)
+    expect(screen.getAllByTestId('random-thumb').map((el) => el.getAttribute('data-photo-id'))).toEqual(ringBefore)
+  })
+
   it('promotes a clicked photo to the centre', async () => {
     const user = userEvent.setup()
     renderShow()

@@ -89,9 +89,23 @@ export function RandomShow({
     if (!element) return
     const measure = (): void => {
       const rect = element.getBoundingClientRect()
-      if (rect.width > 0 && rect.height > 0) {
-        setViewport({ width: Math.round(rect.width), height: Math.round(rect.height) })
-      }
+      if (!(rect.width > 0) || !(rect.height > 0)) return
+      const width = Math.round(rect.width)
+      const height = Math.round(rect.height)
+      /*
+       * Only write when the numbers move.
+       *
+       * `ResizeObserver` delivers an initial notification right after
+       * `observe()`, and more whenever the overlay's box changes. Storing a
+       * fresh object every time changed the state's identity without changing
+       * its value, which re-ran the start effect below — and that effect draws a
+       * new centre photo and a whole new ring. The visible result was the ring
+       * being dealt twice on every open, and a rapid reshuffle whenever the
+       * window was still settling.
+       */
+      setViewport((previous) =>
+        previous.width === width && previous.height === height ? previous : { width, height }
+      )
     }
     measure()
     const observer = new ResizeObserver(measure)
@@ -99,11 +113,23 @@ export function RandomShow({
     return () => observer.disconnect()
   }, [])
 
-  // Start once the window has been measured. Re-seeded per visit, so two visits
-  // show different photos; the seed is kept in the state so a resize can
-  // reproduce the same ring.
+  /**
+   * Draw the first ring, once per visit.
+   *
+   * Guarded by a ref rather than by the dependency array alone: the effect has
+   * to wait for a measured window and a non-empty pool, so it legitimately runs
+   * more than once early on, and only the first pass may deal cards. Re-seeding
+   * is a visible event — every photo on screen is replaced — so it must happen
+   * on entry, not on every resize.
+   */
+  const started = useRef(false)
+  /** The pool the ring was dealt from, so an unchanged pool is not re-sent. */
+  const dealtFrom = useRef<readonly Photo[] | null>(null)
   useEffect(() => {
+    if (started.current) return
     if (viewport.width === 0 || viewport.height === 0 || pool.length === 0) return
+    started.current = true
+    dealtFrom.current = pool
     setState((previous) =>
       showReducer(previous, {
         type: 'show/start',
@@ -113,7 +139,23 @@ export function RandomShow({
         seed: (Date.now() & 0x7fffffff) >>> 0
       })
     )
-  }, [pool, viewport])
+  }, [pool, viewport, ringSize])
+
+  /**
+   * Keep the candidate pool current without disturbing what is on screen.
+   *
+   * The wall replaces its photo array whenever a file is added, removed or
+   * re-scanned, and `visiblePhotos` means the filters can shrink it too. Feeding
+   * that through `show/pool` updates the pool for the next turnover while the
+   * current ring keeps playing; re-seeding instead would empty and refill the
+   * screen for an event the user did not ask for.
+   */
+  useEffect(() => {
+    if (!started.current) return
+    if (dealtFrom.current === pool) return
+    dealtFrom.current = pool
+    setState((previous) => showReducer(previous, { type: 'show/pool', pool }))
+  }, [pool])
 
   /*
    * A changed preference re-deals the ring now.
