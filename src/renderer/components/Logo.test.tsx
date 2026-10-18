@@ -9,6 +9,9 @@ import { Logo } from './Logo'
 /** The shipped stylesheet, read from disk: jsdom evaluates no CSS. */
 const stylesheet = readFileSync(join(__dirname, '..', 'styles.css'), 'utf-8').replace(/\/\*[\s\S]*?\*\//g, '')
 
+/** The shipped app icon: the file Electron and Windows rasterise. */
+const iconSource = readFileSync(join(__dirname, '..', '..', '..', 'build', 'icon.svg'), 'utf-8')
+
 function ruleFor(selector: string): string {
   for (const match of stylesheet.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
     const selectors = match[1]
@@ -18,6 +21,21 @@ function ruleFor(selector: string): string {
   }
   throw new Error(`no rule for ${selector}`)
 }
+
+function declarationFor(selector: string, property: string): string {
+  const value = ruleFor(selector).match(new RegExp(`${property}:\\s*([^;]+)`))?.[1]
+  if (!value) throw new Error(`no ${property} for ${selector}`)
+  return value.trim()
+}
+
+/** The `<rect>` attributes in the app icon, in paint order. */
+function iconRects(): Record<string, string>[] {
+  return [...iconSource.matchAll(/<rect\s+([^>]*?)\/>/g)].map(([, attributes]) =>
+    Object.fromEntries([...attributes.matchAll(/([\w-]+)="([^"]*)"/g)].map(([, name, value]) => [name, value]))
+  )
+}
+
+const GEOMETRY = ['x', 'y', 'width', 'height', 'rx'] as const
 
 function renderLogo(locale = 'en'): ReturnType<typeof render> {
   return render(
@@ -72,5 +90,30 @@ describe('Logo', () => {
     // to give up when horizontal room runs out.
     expect(stylesheet).toContain('.toolbar-logo-word')
     expect(stylesheet).toMatch(/@media \(max-width: 1100px\)/)
+  })
+})
+
+describe('app icon consistency', () => {
+  it('uses the same geometry as the toolbar mark', () => {
+    const { container } = renderLogo()
+    const logoGeometry = [...container.querySelectorAll('svg rect')].map((rect) =>
+      GEOMETRY.map((name) => Number(rect.getAttribute(name)))
+    )
+    // The shipped icon is the same mark at 512 px instead of 32 px.
+    const iconGeometry = iconRects().map((rect) =>
+      GEOMETRY.map((name) => Math.round((Number(rect[name] ?? 0) / 16) * 1000) / 1000)
+    )
+    expect(iconGeometry).toEqual(logoGeometry)
+  })
+
+  it('uses the same colours as the toolbar mark', () => {
+    const [tile, light, accent, mid, dim] = iconRects()
+    expect(tile.fill).toBe(declarationFor('.toolbar-logo .logo-tile', 'fill'))
+    expect(light.fill).toBe(declarationFor('.toolbar-logo .logo-light', 'fill'))
+    expect(accent.fill).toBe(declarationFor(':root', '--accent'))
+    expect(mid.fill).toBe(declarationFor('.toolbar-logo .logo-mid', 'fill'))
+    expect(mid['fill-opacity']).toBe(declarationFor('.toolbar-logo .logo-mid', 'fill-opacity'))
+    expect(dim.fill).toBe(declarationFor('.toolbar-logo .logo-dim', 'fill'))
+    expect(dim['fill-opacity']).toBe(declarationFor('.toolbar-logo .logo-dim', 'fill-opacity'))
   })
 })

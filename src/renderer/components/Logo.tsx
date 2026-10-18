@@ -4,10 +4,12 @@ import { useI18n } from '../i18n/context'
  * The app mark, drawn inline as SVG.
  *
  * Inline rather than an `<img src>` so it inherits the theme variables and needs
- * no asset pipeline or extra file at runtime. The geometry mirrors
- * `build/icon.svg`: two masonry columns with offset rows, which is the app's own
- * layout rather than a generic grid. The wordmark is dropped at this size
- * (28 px) because the columns already read as the app's identity.
+ * no asset pipeline or extra file at runtime. This mark is the source of truth
+ * for `build/icon.svg`, which is the same geometry and colours scaled by 16, so
+ * the window/taskbar icon and this one stay the same mark; keep the two files in
+ * sync. Two masonry columns with offset rows are the app's own layout rather
+ * than a generic grid. The wordmark is dropped at this size (22 px) because the
+ * columns already read as the app's identity.
  */
 export function Logo(): React.JSX.Element {
   const { t } = useI18n()
