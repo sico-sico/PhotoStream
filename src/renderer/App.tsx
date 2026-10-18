@@ -367,6 +367,8 @@ function AppView({
         history={wall.state.history}
         recursive={wall.state.recursive}
         onRecursiveChange={wall.setRecursive}
+        ringSize={wall.state.ringSize}
+        onRingSizeChange={wall.setRingSize}
         onChooseFolder={wall.chooseFolder}
         onOpenHistory={wall.openHistoryEntry}
         onRemoveHistory={wall.removeHistoryEntry}
@@ -471,6 +473,7 @@ function AppView({
         <RandomShow
           pool={wall.visiblePhotos}
           urlMapsByLevel={wall.urlMapsByLevel}
+          ringSize={wall.state.ringSize}
           onShow={wall.ensureThumbs}
           onClose={() => setShowOpen(false)}
         />

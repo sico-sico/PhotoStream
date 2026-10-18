@@ -745,6 +745,32 @@ body {
   cursor: pointer;
 }
 
+/*
+ * The ring-size slider.
+ *
+ * The label row holds the live value on the right, so the control can be dragged
+ * with the number in view.
+ */
+.settings-field > span {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.settings-value {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+
+.settings-field input[type='range'] {
+  width: 100%;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 /* A row in the menu that opens something else rather than holding a value. */
 .settings-action {
   justify-content: flex-start;
@@ -1610,15 +1636,10 @@ body {
   pointer-events: auto;
 }
 
-.random-show-count,
 .random-show-paused {
   font-size: 12px;
-  color: var(--text-dim);
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
-}
-
-.random-show-paused {
   color: var(--accent);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
 }
 
 .random-show-exit {
@@ -1717,9 +1738,16 @@ body {
   max-height: 100%;
   object-fit: contain;
   display: block;
+  /*
+   * The print, not the image: the same paper margin as the ring, wider because
+   * this one is big enough to show it. `object-fit: contain` fits the picture
+   * inside the content box, so the padding is what the margin is drawn in.
+   */
+  padding: 7px;
   border-radius: 3px;
-  filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.5)) drop-shadow(0 18px 42px rgba(0, 0, 0, 0.45))
-    drop-shadow(0 34px 80px rgba(0, 0, 0, 0.35));
+  background: linear-gradient(160deg, #fbf8f1 0%, #e2dccf 56%, #b9b1a2 100%);
+  filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.4)) drop-shadow(0 6px 14px rgba(0, 0, 0, 0.5))
+    drop-shadow(0 18px 42px rgba(0, 0, 0, 0.45)) drop-shadow(0 34px 80px rgba(0, 0, 0, 0.35));
   animation: random-show-photo-in 420ms ease-out;
 }
 
@@ -1743,10 +1771,23 @@ body {
  */
 .random-show-thumb {
   position: absolute;
-  padding: 0;
+  /*
+   * The paper margin.
+   *
+   * A print is not the image: it is the image printed on a sheet, and a sliver of
+   * the sheet is left around it. Three pixels is what the ring can afford at
+   * 110–240px wide — enough to read as a border at arm's length, not enough to
+   * eat the picture. The image below insets itself inside it.
+   */
+  padding: 3px;
   border: 0;
   border-radius: 3px;
-  background: var(--bg-raised);
+  /*
+   * The sheet, lit from the upper left like everything else here: brighter at
+   * the top edge facing the light, settling to a shadowed grey at the bottom.
+   * A flat fill reads as a cut-out; a gradient reads as a surface.
+   */
+  background: linear-gradient(160deg, #f6f3ec 0%, #ddd7ca 52%, #b4ac9d 100%);
   cursor: pointer;
   opacity: var(--depth-opacity, 0.8);
   filter: blur(var(--depth-blur, 0)) saturate(0.92);
@@ -1763,6 +1804,14 @@ body {
   transform: translateZ(calc(var(--depth-z, 0px))) rotateX(var(--tilt-x, 0deg))
     rotateY(var(--tilt-y, 0deg)) rotate(var(--pose-rotate, 0deg)) scale(var(--depth-scale, 1));
   transform-style: preserve-3d;
+  /*
+   * Hover moves the card with the independent `scale` property rather than by
+   * rewriting `transform`. A running animation takes priority over `transform`
+   * declarations, so a hover that only changed `transform` would be silently
+   * ignored while the float animation plays. `scale` is its own layer and
+   * multiplies with the animated transform.
+   */
+  scale: 1;
   animation: random-show-thumb-float var(--float-seconds, 7s) ease-in-out var(--float-delay, 0s) infinite;
   transition:
     left 420ms cubic-bezier(0.22, 0.61, 0.24, 1),
@@ -1772,8 +1821,24 @@ body {
     opacity 200ms ease,
     filter 200ms ease,
     transform 240ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    scale 240ms cubic-bezier(0.34, 1.56, 0.64, 1),
     box-shadow 240ms ease;
   box-shadow:
+    /*
+     * The cut edge.
+     *
+     * A zero-blur offset shadow is the paper's side: hard, opaque and only a
+     * couple of pixels wide, which is what an edge looks like at this size.
+     *
+     * This is a shadow rather than a `::before` pushed back in Z because the
+     * card cannot keep a 3D context: `filter` and `opacity` are grouping
+     * properties, and either one forces `transform-style` to `flat`. A pseudo-
+     * element offset in Z would then be flattened into a normal positioned
+     * descendant and painted over the photo, hiding it inside a grey block.
+     */
+    1px 2px 0 #8d8577,
+    2px 3px 0 #79715f,
+    /* The soft contact shadow the print casts on the backdrop. */
     0 3px 8px rgba(0, 0, 0, 0.4),
     0 10px 24px rgba(0, 0, 0, 0.35),
     0 20px 46px rgba(0, 0, 0, 0.28);
@@ -1845,37 +1910,54 @@ body {
   height: 100%;
   object-fit: cover;
   display: block;
-  border-radius: 3px;
+  border-radius: 2px;
 }
 
 /*
- * Hover: come forward, and hold still.
+ * Hover: come closer, keep the pose.
  *
- * Scaling up, straightening and sharpening at once is the gesture of a photo
- * being picked up. The animation is replaced by `none` so the tilt does not fight
- * the straightening — otherwise the hover looks like a twitch.
+ * The card is grown, sharpened and brightened — but it keeps its tilt, its turn
+ * and its planar rotation. Straightening it to face front was the earlier
+ * behaviour and it was wrong twice over:
  *
- * Stopping the drift matters for more than looks: a photo that is still moving is
- * a moving target, so the click the user has already decided on can land on a
+ * - it broke the scene. Every photo in view is a card hanging at an angle; one
+ *   that snaps square reads as a different object, not as the same photo picked
+ *   up.
+ * - it caused a hover flicker. Straightening moves the card's own outline, so a
+ *   pointer near a tilted edge can end up outside the card the moment it
+ *   straightens — hover is lost, the card snaps back, the pointer is inside
+ *   again, and the two states alternate every frame. That is the jitter that was
+ *   reported with overlapping photos.
+ *
+ * The float animation is paused rather than removed, for the same reason: pause
+ * keeps the card exactly where the animation had it, while `none` would jump it
+ * back to its resting pose and move the outline under the pointer.
+ *
+ * Pausing also matters for more than looks: a photo that is still moving is a
+ * moving target, so the click the user has already decided on can land on a
  * neighbour. Hovering is the point at which they committed to this one.
  */
 .random-show-thumb:hover,
 .random-show-thumb:focus-visible {
-  animation: none;
+  animation-play-state: paused;
   opacity: 1;
   filter: blur(0) saturate(1.05);
   /*
-   * Picked up and turned to face the viewer.
+   * Grown in place, keeping the tilt, the turn and the planar rotation it
+   * already had.
    *
-   * The tilts go to zero rather than the whole transform being replaced by a
-   * flat rotation: the photo has to stay in the same 3D space, or it would
-   * visibly pop out of the scene and back in when the pointer leaves. Bringing
-   * `translateZ` forward is what makes it lift towards the viewer.
+   * `scale` grows the card about its own centre, so the pointer that was inside
+   * is still inside. That is the whole point: a card that moved or shrank on
+   * hover could slip out from under the cursor, the hover would drop, the card
+   * would return, and the two states would alternate every frame — the jitter
+   * that shows up when photos overlap. Growth only ever adds area, and the
+   * raised `z-index` keeps the grown card above its neighbours.
    */
-  transform: translateZ(30px) rotateX(0deg) rotateY(0deg) rotate(0deg)
-    scale(calc(var(--depth-scale, 1) * 1.12));
-  --sheen: 0.12;
+  scale: 1.08;
+  --sheen: 0.14;
   box-shadow:
+    1px 2px 0 #8d8577,
+    2px 3px 0 #79715f,
     0 6px 14px rgba(0, 0, 0, 0.45),
     0 18px 40px rgba(0, 0, 0, 0.42),
     0 36px 72px rgba(0, 0, 0, 0.34);
@@ -1898,6 +1980,99 @@ body {
   height: 100%;
   border-radius: 3px;
   background: linear-gradient(135deg, #23232c, #1a1a21);
+}
+
+/*
+ * The outgoing batch, falling out of the bottom of the window.
+ *
+ * A turnover replaces every ring photo at once, and photos simply blinking out
+ * one by one would read as a rendering glitch. Dropping the whole ring together
+ * reads as one event: the batch ended, and a new one is dealt.
+ *
+ * They are painted above the incoming ring (z-index 2) so they fall *past* the
+ * new photos rather than behind them, which is what makes it look like the old
+ * batch is physically clearing the screen. They still stay under the centre (4)
+ * so nothing ever crosses the subject.
+ */
+.random-show-falling {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  /*
+   * The paper margin and the sheet colour, matching `.random-show-thumb` so a
+   * card does not change appearance the instant it starts to fall.
+   */
+  padding: 3px;
+  border-radius: 3px;
+  background: linear-gradient(160deg, #f6f3ec 0%, #ddd7ca 52%, #b4ac9d 100%);
+  box-shadow:
+    /* The cut edge, as on the ring cards. */
+    1px 2px 0 #8d8577,
+    2px 3px 0 #79715f,
+    /* Deeper than the ring's, because the card is on its way out of the world. */
+    0 8px 20px rgba(0, 0, 0, 0.5),
+    0 22px 52px rgba(0, 0, 0, 0.42);
+  /*
+   * The pose it was wearing. Screenshotting the old pose rather than starting
+   * from a neutral one is the difference between "this photo fell" and "a
+   * rectangle fell where the photo used to be".
+   */
+  transform: rotateX(var(--tilt-x, 0deg)) rotateY(var(--tilt-y, 0deg))
+    rotate(var(--pose-rotate, 0deg));
+  transform-origin: 50% 50%;
+  /*
+   * `forwards` holds the last frame — fully transparent and well below the
+   * window — until the component removes the node. Without it the card would
+   * flash back into place for one frame after the animation ends.
+   */
+  animation: random-show-fall 900ms cubic-bezier(0.42, 0, 0.72, 0.55) var(--fall-delay, 0s) forwards;
+  will-change: transform, opacity;
+}
+
+.random-show-falling img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: 2px;
+}
+
+/*
+ * Falling.
+ *
+ * Three things happen at once, which is what a photo knocked off a table does:
+ *
+ * - it accelerates downward (`gravity` — the ease-in curve carries the speed,
+ *   there is no separate physics), travelling further than the window is tall so
+ *   even a photo at the very bottom clears the edge;
+ * - it tips forward, `rotateX` growing as it goes, so the face turns away from
+ *   the viewer instead of sliding down flat;
+ * - it spins about its own axis, and the spin is signed per card.
+ *
+ * Opacity drops late rather than linearly: a real card stays opaque until it is
+ * well past the edge, and fading it from the first frame makes the fall look
+ * like a dissolve.
+ */
+@keyframes random-show-fall {
+  from {
+    transform: rotateX(var(--tilt-x, 0deg)) rotateY(var(--tilt-y, 0deg))
+      rotate(var(--pose-rotate, 0deg)) translate3d(0, 0, 0);
+    opacity: 1;
+  }
+  35% {
+    opacity: 1;
+  }
+  to {
+    transform: rotateX(calc(var(--tilt-x, 0deg) + 46deg)) rotateY(var(--tilt-y, 0deg))
+      rotate(calc(var(--pose-rotate, 0deg) + var(--fall-spin, 18deg)))
+      /*
+       * `140vh` measured from the card's own position, not from the top of the
+       * window: every card has further to travel than the window is tall, so no
+       * card can still be visible when the animation ends.
+       */
+      translate3d(0, 140vh, 0);
+    opacity: 0;
+  }
 }
 
 .random-show-empty {
@@ -1940,11 +2115,26 @@ body {
     transition: none;
   }
 
-  /* Without the animation the hover cannot override it, so state the pose. */
+  /*
+   * The outgoing batch is hidden outright rather than animated instantly.
+   *
+   * There is no gentle version of "everything falls out of the window": a still
+   * frame of it is just a pile of photos sitting at the bottom edge. So the
+   * turnover switches straight to the new ring — the cards are still in state for
+   * one frame, and drawing them at rest would show the old batch on top of the
+   * new one.
+   */
+  .random-show-falling {
+    display: none;
+  }
+
+  /*
+   * Hover keeps the pose here too, and the animation is already gone, so the
+   * state only has to be restated with the same tilt the card rests at.
+   */
   .random-show-thumb:hover,
   .random-show-thumb:focus-visible {
-    transform: translateZ(20px) rotateX(0deg) rotateY(0deg) rotate(0deg)
-      scale(calc(var(--depth-scale, 1) * 1.08));
+    scale: 1.06;
     filter: none;
   }
 }

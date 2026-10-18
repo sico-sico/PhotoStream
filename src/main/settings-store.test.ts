@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DEFAULT_SETTINGS } from '../shared/types'
+import { DEFAULT_RING_SIZE, DEFAULT_SETTINGS, RING_SIZE_RANGE } from '../shared/types'
 import { SETTINGS_FILE, loadSettings, sanitizeSettings, saveSettings, settingsPath, stripBom } from './settings-store'
 
 let dir = ''
@@ -31,7 +31,8 @@ describe('sanitizeSettings', () => {
       locale: 'fr',
       history: ['/photos'],
       recursive: false,
-      viewerInfo: true
+      viewerInfo: true,
+      ringSize: 45
     }
     expect(sanitizeSettings(value)).toEqual(value)
   })
@@ -40,6 +41,29 @@ describe('sanitizeSettings', () => {
     // Settings files written before the preference existed must not turn the
     // panel on for everyone who upgrades.
     expect(sanitizeSettings({ lastDir: '/photos' }).viewerInfo).toBe(false)
+  })
+
+  it('defaults a missing ringSize to the documented value', () => {
+    // Same contract as the other added preferences: an older file has no key at
+    // all, so it has to pick up the default rather than `undefined`.
+    expect(sanitizeSettings({ lastDir: '/photos' }).ringSize).toBe(DEFAULT_RING_SIZE)
+  })
+
+  it('clamps ringSize into the supported range', () => {
+    // A hand-edited file is the realistic source of nonsense here. The setting
+    // drives how many thumbnails are requested, so an unbounded value would be a
+    // memory problem, not just a cosmetic one.
+    expect(sanitizeSettings({ ringSize: 5 }).ringSize).toBe(RING_SIZE_RANGE.min)
+    expect(sanitizeSettings({ ringSize: 10_000 }).ringSize).toBe(RING_SIZE_RANGE.max)
+    expect(sanitizeSettings({ ringSize: -3 }).ringSize).toBe(RING_SIZE_RANGE.min)
+    // Rounded, so a fractional value cannot produce a fractional candidate count.
+    expect(sanitizeSettings({ ringSize: 44.6 }).ringSize).toBe(45)
+  })
+
+  it('falls back to the default when ringSize is not a number', () => {
+    expect(sanitizeSettings({ ringSize: 'lots' }).ringSize).toBe(DEFAULT_RING_SIZE)
+    expect(sanitizeSettings({ ringSize: null }).ringSize).toBe(DEFAULT_RING_SIZE)
+    expect(sanitizeSettings({ ringSize: Number.NaN }).ringSize).toBe(DEFAULT_RING_SIZE)
   })
 
   it('defaults a missing history to an empty list', () => {
@@ -174,7 +198,8 @@ describe('saveSettings', () => {
       locale: 'fr',
       history: ['/photos', '/photos/trip'],
       recursive: true,
-      viewerInfo: true
+      viewerInfo: true,
+      ringSize: 80
     }
     await saveSettings(dir, settings)
 

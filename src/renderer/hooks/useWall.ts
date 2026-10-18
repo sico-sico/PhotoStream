@@ -75,6 +75,8 @@ export interface UseWall {
   openDropped: (path: string) => Promise<void>
   /** Whether subfolders are included, and the setter that re-scans. */
   setRecursive: (recursive: boolean) => void
+  /** How many photos the random show rings around the centre one. */
+  setRingSize: (ringSize: number) => void
   /**
    * Start loading thumbnails around a scroll destination.
    *
@@ -345,6 +347,9 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
       // Restore how the user last wanted the EXIF panel. Absent in files written
       // before this preference existed, which `== true` treats as off.
       dispatch({ type: 'viewer/info', open: settings.viewerInfo === true })
+      // Absent in files written before the ring-size preference existed, and
+      // `sanitizeSettings` has already clamped whatever was there.
+      dispatch({ type: 'ring/size', ringSize: settings.ringSize })
       // Only reopen the remembered folder if the user has not opened one
       // themselves already. `loadSettings` is async, so a folder dragged in
       // right after launch arrives before this point 鈥?and reopening `lastDir`
@@ -386,7 +391,8 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
       locale: state.locale,
       history: state.history,
       recursive: state.recursive,
-      viewerInfo: state.viewerInfo
+      viewerInfo: state.viewerInfo,
+      ringSize: state.ringSize
     }
     void window.photoStream.saveSettings(settings)
   }, [
@@ -398,7 +404,8 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
     state.locale,
     state.history,
     state.recursive,
-    state.viewerInfo
+    state.viewerInfo,
+    state.ringSize
   ])
 
   // Subscribe to watcher deltas and thumbnail progress.
@@ -823,6 +830,7 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
     prefetchForScroll,
     ensureThumbs,
     setRecursive,
+    setRingSize: (ringSize: number) => dispatch({ type: 'ring/size', ringSize }),
     openHistoryEntry,
     removeHistoryEntry,
     clearHistory,

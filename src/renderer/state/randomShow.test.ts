@@ -1,5 +1,6 @@
 ﻿import { describe, expect, it } from 'vitest'
 import type { Photo } from '@shared/types'
+import { DEFAULT_RING_SIZE, RING_SIZE_RANGE } from '@shared/types'
 import {
   CENTRE_FRACTION,
   INITIAL_SHOW_STATE,
@@ -166,6 +167,136 @@ describe('advance', () => {
     expect(state.centre).not.toBeNull()
     expect(state.surrounding.every((p) => tiny.some((t) => t.id === p.id))).toBe(true)
   })
+
+  it('replaces a different tile every time, not the same tile over and over', () => {
+    // The ring is a queue: index 0 is the photo that has been on screen longest.
+    // Refilling a promoted slot *in place* put the replacement at index 0 of the
+    // queue, so it was promoted eight seconds later, its own replacement took
+    // index 0 again, and so on: the same *tile* churned forever while the rest of
+    // the ring never moved. The photos still changed — a random one was drawn
+    // each time — which is why asserting on ids missed it. The position is what
+    // gets stuck, so the position is what is checked.
+    let state = started()
+    const tiles: string[] = []
+    for (let tick = 1; tick <= 5; tick += 1) {
+      const promotedId = state.surrounding[0].id
+      const box = state.boxes.find((b) => b.id === promotedId)!
+      tiles.push(`${box.x},${box.y}`)
+      state = advance(state, { now: 1000 + tick * 8000, photoMs: 8000, batchMs: 60000 })
+    }
+    expect(new Set(tiles).size).toBe(tiles.length)
+  })
+
+  it('moves the replacement to the back of the queue, not the front', () => {
+    // The direct statement of the bug: after a promotion, the newly inserted
+    // photo must not be first in line.
+    const state = started()
+    const next = advance(state, { now: 1000 + 8000, photoMs: 8000, batchMs: 60000 })
+    const introduced = next.surrounding.filter((p) => !state.surrounding.some((s) => s.id === p.id))
+    expect(introduced).toHaveLength(1)
+    expect(next.surrounding[0].id).not.toBe(introduced[0].id)
+    // And it must be last, since it has been on screen the shortest time.
+    expect(next.surrounding.at(-1)!.id).toBe(introduced[0].id)
+  })
+
+  it('keeps promoting photos the user has not just seen', () => {
+    // Over a run of promotions the centre should keep changing; a stuck slot
+    // showed up as the same handful of photos cycling.
+    let state = started()
+    const centres: string[] = [state.centre!.id]
+    for (let tick = 1; tick <= 6; tick += 1) {
+      state = advance(state, { now: 1000 + tick * 8000, photoMs: 8000, batchMs: 60000 })
+      centres.push(state.centre!.id)
+    }
+    expect(new Set(centres).size).toBe(centres.length)
+  })
+
+  it('keeps the replacement in the tile the promoted photo left', () => {
+    // The queue order changed, but the layout must not: the replacement appears
+    // where the promoted photo was, so nothing reflows.
+    const state = started()
+    const slot = state.boxes[2]
+    const next = focusPhoto(state, slot.id, 2000)
+    const introduced = next.surrounding.find((p) => !state.surrounding.some((s) => s.id === p.id))!
+    const moved = next.boxes.find((box) => box.id === introduced.id)!
+    expect(moved.x).toBe(slot.x)
+    expect(moved.y).toBe(slot.y)
+    expect(moved.w).toBe(slot.w)
+    expect(moved.h).toBe(slot.h)
+  })
+
+  describe('the outward drop on turnover', () => {
+    it('sends the whole outgoing ring out of the window', () => {
+      // Every ring photo is discarded on a turnover, so every ring photo has to
+      // fall. Photos blinking out one by one reads as a glitch; the ring leaving
+      // together reads as the batch ending.
+      const state = started()
+      const next = advance(state, { now: 1000 + 60000, photoMs: 8000, batchMs: 60000 })
+      expect(next.falling.map((card) => card.photo.id).sort()).toEqual(
+        state.surrounding.map((photo) => photo.id).sort()
+      )
+    })
+
+    it('leaves each card in the tile it was standing in', () => {
+      // The card must fall from where it was, not from a recomputed position —
+      // otherwise the first frame of the animation is a jump.
+      const state = started()
+      const next = advance(state, { now: 1000 + 60000, photoMs: 8000, batchMs: 60000 })
+      for (const card of next.falling) {
+        const box = state.boxes.find((b) => b.id === card.photo.id)!
+        expect(card.box.x).toBe(box.x)
+        expect(card.box.y).toBe(box.y)
+        expect(card.box.w).toBe(box.w)
+        expect(card.box.h).toBe(box.h)
+        expect(card.box.rotate).toBe(box.rotate)
+      }
+    })
+
+    it('does not throw the centre photo away', () => {
+      // The centre survives a turnover on purpose, so it must not be among the
+      // cards falling out of the window.
+      const state = started()
+      const next = advance(state, { now: 1000 + 60000, photoMs: 8000, batchMs: 60000 })
+      expect(next.falling.map((card) => card.photo.id)).not.toContain(next.centre!.id)
+    })
+
+    it('does not drop anything for a promotion', () => {
+      // A promotion retires one photo and refills its tile; nothing is discarded,
+      // so nothing falls.
+      const state = started()
+      const next = advance(state, { now: 1000 + 8000, photoMs: 8000, batchMs: 60000 })
+      expect(next.falling).toEqual([])
+      expect(next.fallingKey).toBe(0)
+    })
+
+    it('gives each drop its own key', () => {
+      // A card still animating from one drop must not be mistaken for the next,
+      // which is what the clear action uses to avoid cutting a newer drop short.
+      const state = started()
+      const first = advance(state, { now: 1000 + 60000, photoMs: 8000, batchMs: 60000 })
+      const second = advance(first, { now: 1000 + 120000, photoMs: 8000, batchMs: 60000 })
+      expect(first.fallingKey).toBeGreaterThan(0)
+      expect(second.fallingKey).not.toBe(first.fallingKey)
+    })
+
+    it('clears the fallen cards once the animation is over', () => {
+      const state = started()
+      const dropped = advance(state, { now: 1000 + 60000, photoMs: 8000, batchMs: 60000 })
+      const cleared = showReducer(dropped, { type: 'show/clearFalling', key: dropped.fallingKey })
+      expect(cleared.falling).toEqual([])
+      expect(cleared.fallingKey).toBe(0)
+      // The new ring survives the clear; only the outgoing cards are dropped.
+      expect(cleared.surrounding).toEqual(dropped.surrounding)
+    })
+
+    it('ignores a stale clear, so a newer drop is not cut short', () => {
+      const state = started()
+      const first = advance(state, { now: 1000 + 60000, photoMs: 8000, batchMs: 60000 })
+      const second = advance(first, { now: 1000 + 120000, photoMs: 8000, batchMs: 60000 })
+      const cleared = showReducer(second, { type: 'show/clearFalling', key: first.fallingKey })
+      expect(cleared).toBe(second)
+    })
+  })
 })
 
 describe('focusPhoto', () => {
@@ -251,5 +382,91 @@ describe('show/stop', () => {
     expect(next.centre).toBeNull()
     expect(next.surrounding).toEqual([])
     expect(next.session).toBe(state.session + 1)
+  })
+})
+
+describe('ring size', () => {
+  it('uses the configured size when the show starts', () => {
+    // The preference is a ceiling on candidates, not a promise of that many
+    // cards: the scatter still drops whatever does not fit.
+    const state = showReducer(INITIAL_SHOW_STATE, {
+      type: 'show/start',
+      pool: POOL,
+      viewport: VIEWPORT,
+      seed: 1,
+      ringSize: 40,
+      now: 1000
+    })
+    expect(state.ringSize).toBe(40)
+  })
+
+  it('falls back to the default when no size is given', () => {
+    // Keeps a caller without a preference (the tests, mostly) behaving as before.
+    expect(started().ringSize).toBe(DEFAULT_RING_SIZE)
+  })
+
+  it('puts fewer photos on screen for a smaller ring', () => {
+    // The whole point of the setting. Measured by what actually got placed, since
+    // that is what the user sees.
+    const small = showReducer(INITIAL_SHOW_STATE, {
+      type: 'show/start',
+      pool: POOL,
+      viewport: VIEWPORT,
+      seed: 1,
+      ringSize: 30,
+      now: 1000
+    })
+    const large = showReducer(INITIAL_SHOW_STATE, {
+      type: 'show/start',
+      pool: POOL,
+      viewport: VIEWPORT,
+      seed: 1,
+      ringSize: 90,
+      now: 1000
+    })
+    expect(small.surrounding.length).toBeLessThanOrEqual(30)
+    expect(large.surrounding.length).toBeGreaterThan(small.surrounding.length)
+  })
+
+  it('re-deals immediately when the preference changes', () => {
+    // The control is live, so the effect has to be visible without waiting a
+    // minute for the next turnover.
+    const state = started()
+    const next = showReducer(state, { type: 'show/ringSize', ringSize: 30 })
+    expect(next.ringSize).toBe(30)
+    expect(next.surrounding.length).toBeLessThanOrEqual(30)
+    // The centre is the subject; changing the density must not change it.
+    expect(next.centre).toBe(state.centre)
+  })
+
+  it('keeps the photos already on screen rather than redrawing the batch', () => {
+    // Growing the ring should add cards, not reshuffle what the user is looking
+    // at: a slider drag must not make the batch flicker.
+    const state = showReducer(started(), { type: 'show/ringSize', ringSize: 30 })
+    const before = state.surrounding.map((photo) => photo.id)
+    const next = showReducer(state, { type: 'show/ringSize', ringSize: 45 })
+    const after = new Set(next.surrounding.map((photo) => photo.id))
+    // Everything that was there is still there.
+    for (const id of before) expect(after.has(id)).toBe(true)
+  })
+
+  it('clamps an out-of-range value instead of trusting it', () => {
+    const state = started()
+    expect(showReducer(state, { type: 'show/ringSize', ringSize: 5 }).ringSize).toBe(RING_SIZE_RANGE.min)
+    expect(showReducer(state, { type: 'show/ringSize', ringSize: 5000 }).ringSize).toBe(RING_SIZE_RANGE.max)
+  })
+
+  it('returns the same object when the value is unchanged', () => {
+    // So a re-render with the same preference cannot trigger a pointless re-deal.
+    const state = started()
+    expect(showReducer(state, { type: 'show/ringSize', ringSize: state.ringSize })).toBe(state)
+  })
+
+  it('applies the size on the next turnover too', () => {
+    // The turnover is on a timer and does not go through the start action, so it
+    // reads the stored value; a caller may also pass a fresher one.
+    const state = started()
+    const next = advance(state, { now: 1000 + 60000, photoMs: 8000, batchMs: 60000, ringSize: 30 })
+    expect(next.surrounding.length).toBeLessThanOrEqual(30)
   })
 })

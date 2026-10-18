@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { Settings } from '../shared/types'
-import { DEFAULT_SETTINGS } from '../shared/types'
+import { DEFAULT_SETTINGS, clampRingSize } from '../shared/types'
 import { sanitizeHistory } from '../shared/history'
 
 /**
@@ -47,7 +47,15 @@ export function sanitizeSettings(raw: unknown): Settings {
     // Anything other than an explicit `true` means off: a missing key in an
     // older file must default to the documented behaviour, not to `undefined`.
     recursive: source.recursive === true,
-    viewerInfo: source.viewerInfo === true
+    viewerInfo: source.viewerInfo === true,
+    // An older file has no key at all, and a hand-edited one may hold a string,
+    // a negative number or 10 000. Anything that is not a finite number falls
+    // back to the default — `Number(null)` is 0, which would otherwise clamp to
+    // the lower bound and silently halve the ring.
+    ringSize:
+      typeof source.ringSize === 'number' && Number.isFinite(source.ringSize)
+        ? clampRingSize(source.ringSize)
+        : DEFAULT_SETTINGS.ringSize
   }
 }
 

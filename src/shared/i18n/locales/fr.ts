@@ -30,6 +30,7 @@ export const fr: Catalog = {
   'toolbar.settings': 'Paramètres',
 
   'settings.recursive': 'Inclure les photos des sous-dossiers',
+  'settings.ringSize': 'Photos autour du centre dans le diaporama aléatoire',
 
   'history.show': 'Dossiers récents',
   'history.title': 'Dossiers récents',
@@ -74,7 +75,6 @@ export const fr: Catalog = {
   'show.paused': 'En pause — éloignez le pointeur d’une photo pour reprendre',
   'show.empty': 'Aucune photo à afficher',
   'show.emptyHint': 'Ouvrez un dossier contenant des photos ou élargissez les filtres.',
-  'show.counter': '{shown} sur {total}',
 
   'exif.camera': 'Appareil',
   'exif.exposure': 'Exposition',

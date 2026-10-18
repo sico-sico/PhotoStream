@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Photo, ThumbLevel } from '@shared/types'
 import { useI18n } from '../i18n/context'
-import { INITIAL_SHOW_STATE, advance, centreThumbLevel, focusPhoto, isPaused, shownPhotos, showReducer } from '../state/randomShow'
+import {
+  INITIAL_SHOW_STATE,
+  RING_SIZE,
+  advance,
+  centreThumbLevel,
+  focusPhoto,
+  isPaused,
+  shownPhotos,
+  showReducer
+} from '../state/randomShow'
 
 export interface RandomShowProps {
   /** Photos the show may draw from — the caller passes the filtered set. */
@@ -19,6 +28,13 @@ export interface RandomShowProps {
    * tier there would multiply memory for no visible gain.
    */
   urlMapsByLevel: Record<ThumbLevel, Record<string, string>>
+  /**
+   * How many photos to ring the centre one.
+   *
+   * A live preference: changing it re-deals the ring at once, so the setting can
+   * be dragged while the show is open and its effect seen immediately.
+   */
+  ringSize?: number
   /** Called when the on-screen set changes, so the caller can request thumbnails. */
   onShow: (photos: readonly Photo[], level: ThumbLevel) => void
   onClose: () => void
@@ -32,6 +48,15 @@ export const BATCH_INTERVAL_MS = 60000
 
 /** Timer resolution. Fine enough for an 8 s interval, cheap enough to idle on. */
 const TICK_MS = 250
+
+/**
+ * How long the outgoing batch takes to fall out of the window.
+ *
+ * Must stay in step with the `random-show-fall` animation in the stylesheet: it
+ * is the point at which the falling cards are removed from state. Slightly longer
+ * than the animation so the last frame is never cut off.
+ */
+export const FALL_DURATION_MS = 1150
 
 /**
  * Full-window random show.
@@ -49,6 +74,7 @@ const TICK_MS = 250
 export function RandomShow({
   pool,
   urlMapsByLevel,
+  ringSize = RING_SIZE,
   onShow,
   onClose
 }: RandomShowProps): React.JSX.Element {
@@ -83,10 +109,22 @@ export function RandomShow({
         type: 'show/start',
         pool,
         viewport,
+        ringSize,
         seed: (Date.now() & 0x7fffffff) >>> 0
       })
     )
   }, [pool, viewport])
+
+  /*
+   * A changed preference re-deals the ring now.
+   *
+   * Separate from the start effect on purpose: that one re-seeds and would get a
+   * brand new set of photos, while dragging the slider must only add or remove
+   * cards. `show/ringSize` keeps what is already on screen and rescatters it.
+   */
+  useEffect(() => {
+    setState((previous) => showReducer(previous, { type: 'show/ringSize', ringSize }))
+  }, [ringSize])
 
   // A resize re-places the same ring rather than drawing a new one.
   useEffect(() => {
@@ -104,11 +142,16 @@ export function RandomShow({
   useEffect(() => {
     const timer = window.setInterval(() => {
       setState((previous) =>
-        advance(previous, { now: Date.now(), photoMs: PHOTO_INTERVAL_MS, batchMs: BATCH_INTERVAL_MS })
+        advance(previous, {
+          now: Date.now(),
+          photoMs: PHOTO_INTERVAL_MS,
+          batchMs: BATCH_INTERVAL_MS,
+          ringSize
+        })
       )
     }, TICK_MS)
     return () => window.clearInterval(timer)
-  }, [])
+  }, [ringSize])
 
   // Escape leaves, matching the viewer.
   useEffect(() => {
@@ -169,6 +212,26 @@ export function RandomShow({
     setState((previous) => focusPhoto(previous, id, Date.now()))
   }, [])
 
+  /**
+   * Drop the fallen cards once they are out of sight.
+   *
+   * They are kept in state just long enough to animate, then removed. Holding
+   * them would leave a hidden pile of decoded images behind every turnover, and
+   * with a 90-photo ring that is the bulk of the show's memory.
+   *
+   * The timer is keyed on `fallingKey`, so a second turnover cancels the first
+   * clear rather than cutting the newer drop short. The delay is the animation's
+   * own duration plus the longest stagger.
+   */
+  useEffect(() => {
+    if (state.fallingKey === 0 || state.falling.length === 0) return
+    const key = state.fallingKey
+    const timer = window.setTimeout(() => {
+      setState((previous) => showReducer(previous, { type: 'show/clearFalling', key }))
+    }, FALL_DURATION_MS)
+    return () => window.clearTimeout(timer)
+  }, [state.fallingKey, state.falling.length])
+
   const setHovering = useCallback((hovering: boolean) => {
     setState((previous) => showReducer(previous, { type: 'show/hover', hovering }))
   }, [])
@@ -186,9 +249,6 @@ export function RandomShow({
       <div className="random-show-glow" aria-hidden="true" />
 
       <div className="random-show-bar">
-        <span className="random-show-count">
-          {t('show.counter', { shown: shown.length, total: state.pool.length })}
-        </span>
         {paused ? <span className="random-show-paused">{t('show.paused')}</span> : null}
         <button type="button" className="button ghost random-show-exit" onClick={onClose} title={t('show.exitHint')}>
           {t('show.exit')}
@@ -291,6 +351,48 @@ export function RandomShow({
           </button>
         )
       })}
+
+      {/*
+        The previous batch, on its way out of the window.
+
+        Rendered above the ring but below the centre, so a falling photo can pass
+        in front of the incoming batch without ever covering the subject. Each
+        card carries the box it had a moment ago, so it leaves from where it was
+        standing rather than snapping somewhere else first.
+      */}
+      {state.falling.map((card) => (
+        <div
+          key={card.key}
+          className="random-show-falling"
+          data-testid="random-falling"
+          aria-hidden="true"
+          style={
+            {
+              left: `${card.box.x}px`,
+              top: `${card.box.y}px`,
+              width: `${card.box.w}px`,
+              height: `${card.box.h}px`,
+              // The same pose it was wearing, so the fall starts from the pose
+              // the eye last saw instead of from a squared-up card.
+              '--pose-rotate': `${card.box.rotate.toFixed(2)}deg`,
+              '--tilt-x': `${card.box.tiltX.toFixed(2)}deg`,
+              '--tilt-y': `${card.box.tiltY.toFixed(2)}deg`,
+              // A short, uneven stagger: dropped together but not in lockstep,
+              // which is what separates a pile falling from a curtain dropping.
+              '--fall-delay': `${(((card.box.x + card.box.y) % 7) * 0.028).toFixed(3)}s`,
+              // The spin it picks up on the way down, sign from its own pose so
+              // neighbours do not all twirl the same way.
+              '--fall-spin': `${((card.box.rotate >= 0 ? 1 : -1) * (12 + (card.box.w % 9) * 3.5)).toFixed(1)}deg`
+            } as React.CSSProperties
+          }
+        >
+          {urlMapsByLevel.wall[card.photo.id] ? (
+            <img src={urlMapsByLevel.wall[card.photo.id]} alt="" draggable={false} />
+          ) : (
+            <span className="random-show-placeholder" aria-hidden="true" />
+          )}
+        </div>
+      ))}
 
       {!state.centre ? (
         <div className="random-show-empty">

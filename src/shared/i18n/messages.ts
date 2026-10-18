@@ -39,6 +39,7 @@ export const en = {
   'toolbar.settings': 'Settings',
 
   'settings.recursive': 'Include photos in subfolders',
+  'settings.ringSize': 'Photos around the centre in the random show',
 
   'history.show': 'Recent folders',
   'history.title': 'Recent folders',
@@ -83,7 +84,6 @@ export const en = {
   'show.paused': 'Paused — move the pointer off a photo to continue',
   'show.empty': 'No photos to show',
   'show.emptyHint': 'Open a folder with photos, or widen the current filters.',
-  'show.counter': '{shown} of {total}',
 
   'exif.camera': 'Camera',
   'exif.exposure': 'Exposure',

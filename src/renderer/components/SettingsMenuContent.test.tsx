@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { DEFAULT_RING_SIZE, RING_SIZE_RANGE } from '@shared/types'
 import { I18nProvider } from '../i18n/I18nProvider'
 import { SettingsMenuContent } from './SettingsMenuContent'
 
@@ -16,6 +17,8 @@ function renderContent(
     onAbout: () => {},
     recursive: false,
     onRecursiveChange: () => {},
+    ringSize: DEFAULT_RING_SIZE,
+    onRingSizeChange: () => {},
     ...props
   }
   return render(
@@ -86,5 +89,46 @@ describe('SettingsMenuContent', () => {
   it('translates the subfolder label', () => {
     renderContent({}, 'zh-CN')
     expect(screen.getByRole('checkbox', { name: '包含子文件夹中的照片' })).toBeInTheDocument()
+  })
+
+  describe('ring size', () => {
+    it('offers a slider bounded to the supported range', () => {
+      renderContent()
+      const slider = screen.getByRole('slider', { name: /around the centre/i })
+      expect(slider).toHaveAttribute('min', String(RING_SIZE_RANGE.min))
+      expect(slider).toHaveAttribute('max', String(RING_SIZE_RANGE.max))
+    })
+
+    it('shows the current value as a number', () => {
+      // A thumb's position alone cannot be read as a value.
+      renderContent({ ringSize: 55 })
+      expect(screen.getByText('55')).toBeInTheDocument()
+      expect((screen.getByRole('slider', { name: /around the centre/i }) as HTMLInputElement).value).toBe('55')
+    })
+
+    it('reports changes with a number, not the string the input carries', () => {
+      // `event.target.value` is a string; the reducer clamps a number.
+      const onRingSizeChange = vi.fn()
+      renderContent({ ringSize: 70, onRingSizeChange })
+      const slider = screen.getByRole('slider', { name: /around the centre/i })
+      fireEvent.change(slider, { target: { value: '45' } })
+      expect(onRingSizeChange).toHaveBeenCalledWith(45)
+    })
+
+    it('does not close the menu when the value changes', async () => {
+      // Same reasoning as the subfolder toggle: the show is behind the panel, so
+      // the control has to stay open while the user judges the result.
+      const onDone = vi.fn()
+      renderContent({ onDone })
+      fireEvent.change(screen.getByRole('slider', { name: /around the centre/i }), {
+        target: { value: '40' }
+      })
+      expect(onDone).not.toHaveBeenCalled()
+    })
+
+    it('translates the label', () => {
+      renderContent({}, 'zh-CN')
+      expect(screen.getByText('随机播放中环绕居中的照片数')).toBeInTheDocument()
+    })
   })
 })

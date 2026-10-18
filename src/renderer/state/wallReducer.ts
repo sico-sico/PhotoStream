@@ -1,5 +1,5 @@
 import type { Filters, LayoutMode, Photo, SortMode } from '@shared/types'
-import { DEFAULT_SORT, EMPTY_FILTERS } from '@shared/types'
+import { DEFAULT_RING_SIZE, DEFAULT_SORT, EMPTY_FILTERS, clampRingSize } from '@shared/types'
 import { sortPhotos } from '@shared/photoStore'
 import { addToHistory, removeFromHistory, sanitizeHistory } from '@shared/history'
 
@@ -52,6 +52,8 @@ export interface WallState {
   history: string[]
   /** Whether the current library includes photos in subfolders. */
   recursive: boolean
+  /** Ceiling on the random show's ring, from the user's preference. */
+  ringSize: number
 }
 
 export const INITIAL_STATE: WallState = {
@@ -68,7 +70,8 @@ export const INITIAL_STATE: WallState = {
   errorMessage: '',
   locale: '',
   history: [],
-  recursive: false
+  recursive: false,
+  ringSize: DEFAULT_RING_SIZE
 }
 
 export type WallAction =
@@ -86,6 +89,7 @@ export type WallAction =
   | { type: 'history/remove'; dir: string }
   | { type: 'history/clear' }
   | { type: 'recursive/set'; recursive: boolean }
+  | { type: 'ring/size'; ringSize: number }
   | { type: 'selection/set'; id: string | null }
   | { type: 'selection/focus'; id: string | null }
   | { type: 'selection/step'; delta: number; order: readonly string[] }
@@ -169,6 +173,12 @@ export function reducer(state: WallState, action: WallAction): WallState {
       // Only the preference changes here; the caller re-opens the folder, since
       // the photo list itself is produced by the main process.
       return { ...state, recursive: action.recursive }
+
+    case 'ring/size':
+      // Clamped here rather than at the call site: the reducer is the boundary
+      // between the UI and the persisted value, so it is the one place that must
+      // not let an out-of-range number through.
+      return { ...state, ringSize: clampRingSize(action.ringSize) }
 
     case 'selection/set':
       // Focusing a photo also opens it: that is what clicking a tile means. The

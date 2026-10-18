@@ -21,6 +21,9 @@ export interface ToolbarProps {
   /** Whether subfolder JPEGs are included. */
   recursive: boolean
   onRecursiveChange: (recursive: boolean) => void
+  /** How many photos the random show rings around the centre one. */
+  ringSize: number
+  onRingSizeChange: (ringSize: number) => void
   onChooseFolder: () => void
   onOpenHistory: (dir: string) => void
   onRemoveHistory: (dir: string) => void
@@ -52,6 +55,8 @@ export function Toolbar({
   history,
   recursive,
   onRecursiveChange,
+  ringSize,
+  onRingSizeChange,
   onChooseFolder,
   onOpenHistory,
   onRemoveHistory,
@@ -163,6 +168,8 @@ export function Toolbar({
             onAbout={onAbout}
             recursive={recursive}
             onRecursiveChange={onRecursiveChange}
+            ringSize={ringSize}
+            onRingSizeChange={onRingSizeChange}
           />
         )}
       </Menu>

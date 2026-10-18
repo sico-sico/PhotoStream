@@ -1105,3 +1105,268 @@ test('keeps the history across a restart', async () => {
   await expect(page.locator('.history-item .history-path').first()).toHaveText(photoDir)
   await page.keyboard.press('Escape')
 })
+
+/**
+ * The random show, in a real compositor.
+ *
+ * jsdom checks nothing here: no CSS is applied, no 3D context exists and hover
+ * cannot be evaluated. What this test is for is the part that only a real engine
+ * can answer — that the cards are actually composited as 3D objects with a
+ * measurable size, and that hovering does not move or shrink the card under the
+ * pointer.
+ */
+test('floats the ring photos as solid prints', async () => {
+  await openLibrary()
+  await useEnglish()
+  await page.getByRole('button', { name: 'Random show' }).click()
+
+  const centre = page.getByTestId('random-centre')
+  await expect(centre).toBeVisible()
+
+  const thumb = page.getByTestId('random-thumb').first()
+  await expect(thumb).toBeVisible()
+
+  // The card has to be a real box: a zero-width one would still pass a
+  // visibility check but would have no paper to show.
+  const box = await thumb.boundingBox()
+  expect(box?.width ?? 0).toBeGreaterThan(30)
+  expect(box?.height ?? 0).toBeGreaterThan(30)
+
+  // The 3D context is what makes the tilt exist at all. A typo dropping
+  // `preserve-3d` or `perspective` would leave every unit test green, so assert
+  // the computed values in the real engine.
+  const depth = await thumb.evaluate((el) => {
+    const card = getComputedStyle(el)
+    const parent = getComputedStyle(el.parentElement as Element)
+    const matrix = new DOMMatrix(card.transform)
+    return {
+      perspective: parent.perspective,
+      // A matrix with a non-zero m13/m23/m43 is a genuine 3D transform; a flat
+      // one would be a 2D matrix with an identity third column.
+      is3d: !matrix.is2D,
+      depth: [matrix.m13, matrix.m23, matrix.m43].some((v) => Math.abs(v) > 1e-6)
+    }
+  })
+  expect(depth.perspective).not.toBe('none')
+  expect(depth.is3d).toBe(true)
+  expect(depth.depth).toBe(true)
+
+  // The photo itself has to be visible. The earlier paper-edge attempt put an
+  // absolutely positioned pseudo-element over the image and the card rendered
+  // as an empty grey frame — visible, sized, and completely wrong.
+  const painted = await thumb.evaluate((el) => {
+    const image = el.querySelector('img')
+    if (!image) return null
+    const rect = image.getBoundingClientRect()
+    // What is actually on top at the centre of the photo?
+    const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+    return {
+      width: rect.width,
+      height: rect.height,
+      // The thumbnail has to have decoded: a pending or broken `src` leaves the
+      // card with the sheet colour and nothing printed on it.
+      decoded: image.naturalWidth > 0,
+      // The topmost element at that point must be the image, or the card that
+      // contains it — never an overlay.
+      onTop: top === image || top === el
+    }
+  })
+  expect(painted).not.toBeNull()
+  expect(painted!.width).toBeGreaterThan(20)
+  expect(painted!.height).toBeGreaterThan(20)
+  expect(painted!.decoded).toBe(true)
+  expect(painted!.onTop).toBe(true)
+
+  // The paper margin exists: the image is inset inside its card.
+  const margin = await thumb.evaluate((el) => {
+    const image = el.querySelector('img')
+    if (!image) return null
+    const outer = el.getBoundingClientRect()
+    const inner = image.getBoundingClientRect()
+    return { x: inner.left - outer.left, y: inner.top - outer.top }
+  })
+  expect(margin).not.toBeNull()
+  expect(margin!.x).toBeGreaterThan(0)
+  expect(margin!.y).toBeGreaterThan(0)
+
+  // Hovering must not take the card out from under the pointer — that is the
+  // bug that made overlapping photos vibrate.
+  //
+  // `hover()` cannot be used: Playwright waits for the element to stop moving,
+  // and these cards drift continuously by design. Moving the mouse directly is
+  // the only way to reach a photo that is never still.
+  const before = await thumb.boundingBox()
+  const pointer = { x: before!.x + before!.width / 2, y: before!.y + before!.height / 2 }
+  await page.mouse.move(pointer.x, pointer.y)
+  // Let the 240ms scale transition finish before sampling.
+  await page.waitForTimeout(400)
+
+  // The card grew rather than moved. `scale` is read instead of the bounding
+  // box: a rotated element's bounding box changes as the float animation turns
+  // it, so its geometry is not a stable thing to compare.
+  const scale = await thumb.evaluate((el) => getComputedStyle(el).scale)
+  expect(Number.parseFloat(scale)).toBeGreaterThan(1)
+
+  // The float animation is paused, not removed: `none` would snap the card back
+  // to its resting pose and move the outline under the cursor.
+  const playState = await thumb.evaluate((el) => getComputedStyle(el).animationPlayState)
+  expect(playState).toBe('paused')
+
+  // The jitter itself, over about a second. If the hover were lost and regained,
+  // the animation would resume, the card would drift away and the pointer would
+  // end up over a neighbour — so the requirement is simply that the same card
+  // stays under the pointer for every frame.
+  const photoId = await thumb.getAttribute('data-photo-id')
+  const hits: (string | null)[] = []
+  for (let i = 0; i < 12; i += 1) {
+    await page.waitForTimeout(80)
+    hits.push(
+      await page.evaluate(({ x, y }) => {
+        const hit = document.elementFromPoint(x, y)
+        return hit?.closest('.random-show-thumb')?.getAttribute('data-photo-id') ?? null
+      }, pointer)
+    )
+  }
+  expect(new Set(hits)).toEqual(new Set([photoId]))
+
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.random-show')).toHaveCount(0)
+})
+
+/**
+ * The ring-size preference, end to end.
+ *
+ * Three separate things have to work together: the slider writes the wall state,
+ * the wall state persists, and the show reads it. A bug in any of the three looks
+ * identical from the UI (the ring does not change), so they are checked together
+ * on a real launch, and the persistence is checked across a restart.
+ */
+test('applies the ring-size preference and keeps it across a restart', async () => {
+  /*
+   * A dedicated folder, because the ring is capped by the pool: the shared
+   * fixture has 15 photos, so both 30 and 90 would place 14 and the setting would
+   * look broken when it was working. 80 photos leaves room for the largest ring.
+   */
+  const bigDir = await mkdtemp(join(tmpdir(), 'photostream-e2e-ring-'))
+  for (let index = 0; index < 80; index += 1) {
+    const day = String((index % 28) + 1).padStart(2, '0')
+    await writeJpeg(bigDir, `2021-05-${day} Ring ${index}.jpg`, `2021:05:${day} 10:00:00`)
+  }
+
+  await app.evaluate(async ({ dialog }, dir) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [dir] })
+  }, bigDir)
+  await useEnglish()
+  // The empty-state button comes first in the DOM; the toolbar's copy is the
+  // second match, so target the empty state explicitly — same as `openLibrary`.
+  const emptyAction = page.locator('.empty-state button.primary')
+  if ((await emptyAction.count()) > 0) await emptyAction.click()
+  else await page.locator('.toolbar-open-main').click()
+  await expect(page.locator('.dir-label')).toHaveText(bigDir)
+  await expect(page.locator('.photo-count')).not.toHaveText('0/0')
+
+  // Open the gear menu and drag the slider to its minimum.
+  await page.locator('.menu-trigger').click()
+  const slider = page.locator('.settings-menu input[type="range"]')
+  await expect(slider).toBeVisible()
+  await expect(slider).toHaveAttribute('min', '30')
+  await expect(slider).toHaveAttribute('max', '90')
+
+  // `fill` on a range input sets the value and fires `input` + `change`, which is
+  // what React listens for — a real drag would be flaky at this speed.
+  await slider.fill('30')
+  await expect(page.locator('.settings-value')).toHaveText('30')
+  // Changing a preference must not close the menu, so the effect can be watched.
+  await expect(page.locator('.settings-menu')).toBeVisible()
+  await page.keyboard.press('Escape')
+
+  await page.getByRole('button', { name: 'Random show' }).click()
+  await expect(page.getByTestId('random-centre')).toBeVisible()
+  await expect(page.getByTestId('random-thumb').first()).toBeVisible()
+  const small = await page.getByTestId('random-thumb').count()
+  // 30 candidates is the ceiling, so the ring cannot exceed it however much room
+  // the window has.
+  expect(small).toBeLessThanOrEqual(30)
+  expect(small).toBeGreaterThan(0)
+  await page.keyboard.press('Escape')
+
+  // Raise it and confirm the ring grows, without reopening the show.
+  await page.locator('.menu-trigger').click()
+  await page.locator('.settings-menu input[type="range"]').fill('90')
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: 'Random show' }).click()
+  await expect(page.getByTestId('random-thumb').first()).toBeVisible()
+  const large = await page.getByTestId('random-thumb').count()
+  expect(large).toBeGreaterThan(small)
+  await page.keyboard.press('Escape')
+
+  // Now the persistence half: a fresh process must come back with 90, not 70.
+  await app.close()
+  app = await electron.launch({
+    args: [join(__dirname, '..', '..', 'out', 'main', 'index.js')],
+    env: { ...process.env, PHOTOSTREAM_USER_DATA: userDataDir }
+  })
+  page = await app.firstWindow()
+  await page.waitForLoadState('domcontentloaded')
+  await useEnglish()
+
+  await page.locator('.menu-trigger').click()
+  await expect(page.locator('.settings-value')).toHaveText('90')
+  await page.keyboard.press('Escape')
+
+  // Leave the shared library as the other tests expect it.
+  await openLibrary()
+  await rm(bigDir, { recursive: true, force: true })
+})
+
+/**
+ * The turnover drop, in a real compositor.
+ *
+ * jsdom can prove the cards exist and are removed again, but not that they move:
+ * it applies no CSS, so the keyframes are inert there. The only way to know the
+ * batch actually falls out of the window is to watch it travel and then vanish.
+ */
+test('drops the outgoing batch out of the bottom of the window', async () => {
+  await openLibrary()
+  await useEnglish()
+  await page.getByRole('button', { name: 'Random show' }).click()
+  await expect(page.getByTestId('random-centre')).toBeVisible()
+  await expect(page.getByTestId('random-thumb').first()).toBeVisible()
+
+  const ringCount = await page.getByTestId('random-thumb').count()
+  expect(ringCount).toBeGreaterThan(0)
+
+  // A turnover is a 60 s affair; waiting for it would make this test useless as a
+  // regression net. The component reads `Date.now()` on every tick, so shifting
+  // the clock forward is exactly what the next tick would have seen.
+  const falling = await page.evaluate(async () => {
+    const original = Date.now
+    Date.now = () => original() + 60_000
+    // One tick is 250 ms; give React a couple of frames to commit the new state.
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    const cards = document.querySelectorAll('.random-show-falling').length
+    Date.now = original
+    return cards
+  })
+  expect(falling).toBe(ringCount)
+
+  // The cards exist and are positioned. Now confirm they are actually moving: a
+  // card that is present but never animated would still pass a DOM check.
+  const card = page.locator('.random-show-falling').first()
+  const start = await card.boundingBox()
+  expect(start).not.toBeNull()
+  // The animation runs 900 ms after at most ~170 ms of stagger.
+  await page.waitForTimeout(500)
+  const middle = await card.boundingBox()
+  expect(middle).not.toBeNull()
+  // It must have travelled downward, which is what the effect claims.
+  expect(middle!.y).toBeGreaterThan(start!.y)
+
+  // And it must be gone once out of sight, or every turnover would leave a pile
+  // of decoded images behind.
+  await page.waitForTimeout(900)
+  await expect(page.locator('.random-show-falling')).toHaveCount(0)
+
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.random-show')).toHaveCount(0)
+})

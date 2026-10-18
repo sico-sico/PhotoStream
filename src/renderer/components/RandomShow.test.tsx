@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { Photo } from '@shared/types'
 import { I18nProvider } from '../i18n/I18nProvider'
-import { RandomShow, PHOTO_INTERVAL_MS } from './RandomShow'
+import { RandomShow, BATCH_INTERVAL_MS, FALL_DURATION_MS, PHOTO_INTERVAL_MS } from './RandomShow'
 
 /**
  * The random show component.
@@ -216,11 +218,14 @@ describe('RandomShow', () => {
     expect(screen.queryByTestId('random-centre')).toBeNull()
   })
 
-  it('reports the count of photos on screen against the pool', async () => {
+  it('keeps the bar free of progress chrome', async () => {
+    // A random show has no order and no end, so a "3 of 3226" counter claimed a
+    // position in a sequence that does not exist. The bar now carries only the
+    // pause notice and the exit button.
     renderShow()
     await waitFor(() => expect(screen.getAllByTestId('random-thumb').length).toBeGreaterThan(0))
-    const shown = screen.getAllByTestId('random-thumb').length + 1
-    expect(screen.getByText(new RegExp(`^${shown} of 30$`))).toBeInTheDocument()
+    expect(screen.queryByText(/\bof \d+$/)).toBeNull()
+    expect(document.querySelector('.random-show-count')).toBeNull()
   })
 
   it('advances on its own after the photo interval', async () => {
@@ -240,5 +245,199 @@ describe('RandomShow', () => {
 
     const second = screen.getByTestId('random-centre').querySelector('img')?.getAttribute('src')
     expect(second).not.toBe(first)
+  })
+
+  /**
+   * The turnover drop.
+   *
+   * Timers are faked because the drop is driven by the batch interval, and the
+   * removal is driven by a timer of its own — both are wall-clock rules, so
+   * neither can be tested by waiting.
+   */
+  describe('on turnover', () => {
+    /** Advance the show's clock past the batch interval and let effects settle. */
+    async function turnover(): Promise<void> {
+      await act(async () => {
+        vi.setSystemTime(new Date(Date.now() + BATCH_INTERVAL_MS + 500))
+        await vi.advanceTimersByTimeAsync(BATCH_INTERVAL_MS + 500)
+      })
+    }
+
+    it('renders the outgoing ring as falling cards', async () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+      renderShow()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      const ringBefore = screen.getAllByTestId('random-thumb').length
+      expect(ringBefore).toBeGreaterThan(0)
+      expect(screen.queryAllByTestId('random-falling')).toHaveLength(0)
+
+      await turnover()
+
+      // One falling card per outgoing ring photo: the whole batch leaves, not a
+      // sample of it.
+      const falling = screen.getAllByTestId('random-falling')
+      expect(falling).toHaveLength(ringBefore)
+    })
+
+    it('does not let a falling card take the click', async () => {
+      // They are decoration on their way out; the new ring underneath has to stay
+      // clickable while they pass over it.
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+      renderShow()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      await turnover()
+      for (const card of screen.getAllByTestId('random-falling')) {
+        expect(card).toHaveAttribute('aria-hidden', 'true')
+      }
+    })
+
+    it('removes the fallen cards once they are out of sight', async () => {
+      // Otherwise every turnover would leave a hidden pile of decoded images
+      // behind — with a 90-photo ring that is most of the show's memory.
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+      renderShow()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      await turnover()
+      expect(screen.getAllByTestId('random-falling').length).toBeGreaterThan(0)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(FALL_DURATION_MS + 100)
+      })
+      expect(screen.queryAllByTestId('random-falling')).toHaveLength(0)
+      // The centre survives the cleanup — only the outgoing cards are dropped.
+      // (The ring itself may legitimately be empty here: this fixture's pool is
+      // small enough that a turnover consumes all of it, which is covered by the
+      // reducer's own tests.)
+      expect(screen.getByTestId('random-centre')).toBeInTheDocument()
+    })
+  })
+
+  /**
+   * The hover state, read from the stylesheet.
+   *
+   * jsdom applies no CSS and resolves no `:hover`, so the rule cannot be observed
+   * on an element; reading the shipped file is the only way to assert it.
+   */
+  describe('hover styling', () => {
+    const stylesheet = readFileSync(join(__dirname, '..', 'styles.css'), 'utf-8').replace(/\/\*[\s\S]*?\*\//g, '')
+
+    /** The body of the first rule whose selector list contains `selector`. */
+    function cssRule(selector: string): string {
+      for (const match of stylesheet.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+        const selectors = match[1]
+          .split(',')
+          .map((part) => part.replace(/\s+/g, ' ').trim())
+          .filter((part) => part.length > 0)
+        if (selectors.includes(selector)) return match[2]
+      }
+      throw new Error(`no rule for ${selector}`)
+    }
+
+    const hoverBody = () => cssRule('.random-show-thumb:hover')
+
+    it('keeps the reading of the pose the card already had', async () => {
+      // Squaring the card up on hover both broke the illusion (one card facing
+      // front among tilted ones reads as a different object) and caused a hover
+      // flicker, because straightening moves the outline under the pointer.
+      expect(hoverBody()).not.toMatch(/rotateX\(\s*0deg\s*\)/)
+      expect(hoverBody()).not.toMatch(/rotateY\(\s*0deg\s*\)/)
+      expect(hoverBody()).not.toMatch(/rotate\(\s*0deg\s*\)/)
+    })
+
+    it('does not replace the animated transform', async () => {
+      // A running animation outranks `transform` declarations, so anything in
+      // here would either be ignored or would have to stop the animation.
+      expect(hoverBody()).not.toMatch(/(^|[\s;])transform\s*:/)
+      expect(hoverBody()).not.toMatch(/animation\s*:\s*none/)
+    })
+
+    it('grows the card on hover rather than moving it', async () => {
+      // Growing about the card's own centre can never take the pointer out of
+      // the card, which is what keeps overlapping photos from vibrating.
+      expect(hoverBody()).toMatch(/(^|[\s;])scale\s*:/)
+      expect(hoverBody()).not.toMatch(/(^|[\s;])translate\s*:/)
+      expect(hoverBody()).toMatch(/animation-play-state\s*:\s*paused/)
+    })
+
+    it('pauses the float animation so a click lands where it was aimed', async () => {
+      // `none` would snap the card back to its resting pose; `paused` freezes it
+      // exactly where the animation had it.
+      expect(hoverBody()).toMatch(/animation-play-state\s*:\s*paused/)
+      expect(cssRule('.random-show-thumb')).toMatch(/animation-play-state|animation:/)
+    })
+
+    it('keeps the reduced-motion hover consistent with the animated one', async () => {
+      // Reduced motion has no animation to compose with, so the pose has to be
+      // restated — but it must still be the card's own tilt, not a squared-up one.
+      const reduced = stylesheet.slice(stylesheet.indexOf('@media (prefers-reduced-motion: reduce)'))
+      const block = reduced.slice(reduced.indexOf('.random-show-thumb:hover'))
+      const body = block.slice(block.indexOf('{') + 1, block.indexOf('}'))
+      expect(body).not.toMatch(/rotateX\(\s*0deg\s*\)/)
+      expect(body).not.toMatch(/rotateY\(\s*0deg\s*\)/)
+    })
+  })
+
+  /**
+   * The photos are meant to read as physical prints, not as flat rectangles.
+   *
+   * That needs two things the geometry tests cannot see: a paper margin around
+   * the image, and an edge with actual thickness that the tilt exposes. Both are
+   * CSS, so both are asserted against the shipped stylesheet.
+   */
+  describe('paper body', () => {
+    const stylesheet = readFileSync(join(__dirname, '..', 'styles.css'), 'utf-8').replace(/\/\*[\s\S]*?\*\//g, '')
+
+    function cssRule(selector: string): string {
+      for (const match of stylesheet.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+        const selectors = match[1]
+          .split(',')
+          .map((part) => part.replace(/\s+/g, ' ').trim())
+          .filter((part) => part.length > 0)
+        if (selectors.includes(selector)) return match[2]
+      }
+      throw new Error(`no rule for ${selector}`)
+    }
+
+    it('leaves a paper margin around the image', async () => {
+      // Without padding the image goes edge to edge and the card reads as a
+      // crop, not a print.
+      expect(cssRule('.random-show-thumb')).toMatch(/(^|[\s;])padding\s*:\s*[1-9]/)
+      expect(cssRule('.random-show-centre img')).toMatch(/(^|[\s;])padding\s*:\s*[1-9]/)
+    })
+
+    it('paints the sheet rather than leaving it see-through', async () => {
+      // A transparent margin would show the backdrop through the border and
+      // destroy the effect; the gradient is what makes the surface catch light.
+      const body = cssRule('.random-show-thumb')
+      expect(body).toMatch(/(^|(\s))background\s*:\s*linear-gradient/)
+      expect(body).not.toMatch(/(^|(\s))background\s*:\s*transparent/)
+    })
+
+    it('draws the cut edge as a hard offset shadow', async () => {
+      // Two opaque zero-blur shadows give the print a side. They have to be part
+      // of `box-shadow` rather than a pseudo-element offset in Z: `filter` and
+      // `opacity` are grouping properties and force `transform-style` to `flat`,
+      // which would flatten the offset into a normal positioned box painted over
+      // the photo — the card then renders as an empty grey frame.
+      const body = cssRule('.random-show-thumb')
+      expect(body).toMatch(/box-shadow[^;]*1px 2px 0/)
+      expect(body).toMatch(/box-shadow[^;]*2px 3px 0/)
+    })
+
+    it('never paints an opaque pseudo-element over the photo', async () => {
+      // The regression guard for the empty-frame bug: any absolutely positioned
+      // `::before` with `inset: 0` on the card sits above the in-flow image and
+      // hides it completely.
+      expect(() => cssRule('.random-show-thumb::before')).toThrow()
+    })
   })
 })

@@ -30,6 +30,7 @@ export const zhCN: Catalog = {
   'toolbar.settings': '设置',
 
   'settings.recursive': '包含子文件夹中的照片',
+  'settings.ringSize': '随机播放中环绕居中的照片数',
 
   'history.show': '最近的文件夹',
   'history.title': '最近的文件夹',
@@ -74,7 +75,6 @@ export const zhCN: Catalog = {
   'show.paused': '已暂停——把指针移开小图即可继续',
   'show.empty': '没有可播放的照片',
   'show.emptyHint': '请打开一个含照片的文件夹，或放宽筛选条件。',
-  'show.counter': '第 {shown} 张 / 共 {total} 张',
 
   'exif.camera': '相机',
   'exif.exposure': '曝光',

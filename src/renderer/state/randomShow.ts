@@ -1,5 +1,6 @@
 import { centreBoxFor, mulberry32, pickRandom, scatterAround, type Box, type ScatterBox } from '@shared/random'
 import { pickThumbLevel } from '@shared/thumbs'
+import { DEFAULT_RING_SIZE, clampRingSize } from '@shared/types'
 import type { Photo, ThumbLevel } from '@shared/types'
 
 /**
@@ -13,13 +14,15 @@ import type { Photo, ThumbLevel } from '@shared/types'
  */
 
 /**
- * How many photos ring the centre one. More than fits; the scatter drops the rest.
+ * How many photos ring the centre one, when the caller does not say.
  *
- * Sized generously: the scatter is what decides how many actually fit, so this
- * only has to be a ceiling. A crowded screen is the point — a handful of photos
- * around a big one reads as a slideshow, while a dense cloud reads as a wall.
+ * The scatter decides how many actually fit, so this is a ceiling rather than a
+ * promise: at 2560x1440 about 63 of 90 candidates find a slot. The live value
+ * comes from the user's `ringSize` setting via `ShowOptions.ringSize`; this
+ * constant is the fallback for the tests and for a caller that has no preference
+ * to offer.
  */
-export const RING_SIZE = 90
+export const RING_SIZE = DEFAULT_RING_SIZE
 
 /**
  * Fraction of the window's shorter side the centre photo occupies.
@@ -31,6 +34,25 @@ export const RING_SIZE = 90
  */
 export const CENTRE_FRACTION = 0.68
 
+/**
+ * A photo on its way out of the window.
+ *
+ * Only a turnover produces these. Retiring one photo into another tile (a
+ * promotion) is a move within the ring and is transitioned, not thrown away;
+ * replacing *every* ring photo at once needs a gesture that reads as one event,
+ * and that gesture is the whole ring dropping out of the bottom.
+ *
+ * The card keeps the box it had, so it leaves from exactly where it was rather
+ * than from a recomputed position, and it keeps the photo so the image can still
+ * be drawn while it falls.
+ */
+export interface FallingCard {
+  /** Unique per turnover, so a card from an old batch cannot reanimate. */
+  key: string
+  photo: Photo
+  box: ScatterBox
+}
+
 export interface ShowState {
   /** Incremented on every start/stop, so a stale timer cannot drive a new session. */
   session: number
@@ -39,8 +61,26 @@ export interface ShowState {
   /** Photos in the ring, excluding the centre. */
   surrounding: Photo[]
   boxes: ScatterBox[]
+  /**
+   * The previous ring, mid-fall.
+   *
+   * Held in state rather than derived in the component because the reducer is the
+   * only place that knows the ring is being replaced, and it has the outgoing
+   * boxes right there. Cleared by `show/clearFalling` once the animation is over.
+   */
+  falling: FallingCard[]
+  /** Timestamp that identifies the current drop; 0 when nothing is falling. */
+  fallingKey: number
   /** Everything the show may draw from; the caller keeps it in sync with filters. */
   pool: Photo[]
+  /**
+   * Ceiling on how many photos ring the centre one, from the user's preference.
+   *
+   * Held in state because a turnover happens on a timer, outside any render, so
+   * the value has to be reachable from the reducer without the component passing
+   * it again. `show/ringSize` updates it and re-deals immediately.
+   */
+  ringSize: number
   viewport: { width: number; height: number }
   seed: number
   /** Clock value for each timer, in milliseconds. */
@@ -60,7 +100,10 @@ export const INITIAL_SHOW_STATE: ShowState = {
   centreBox: null,
   surrounding: [],
   boxes: [],
+  falling: [],
+  fallingKey: 0,
   pool: [],
+  ringSize: DEFAULT_RING_SIZE,
   viewport: { width: 0, height: 0 },
   seed: 1,
   startedAt: 0,
@@ -77,17 +120,30 @@ export type ShowAction =
       pool: readonly Photo[]
       viewport: { width: number; height: number }
       seed: number
+      /** How many photos to ring the centre one; falls back to `RING_SIZE`. */
+      ringSize?: number
       now?: number
     }
   | { type: 'show/pool'; pool: readonly Photo[] }
+  | { type: 'show/ringSize'; ringSize: number }
   | { type: 'show/hover'; hovering: boolean }
   | { type: 'show/resize'; viewport: { width: number; height: number } }
+  /** Drops the fallen cards once they are out of sight. `key` guards staleness. */
+  | { type: 'show/clearFalling'; key: number }
   | { type: 'show/stop' }
 
 export interface ShowOptions {
   now: number
   photoMs: number
   batchMs: number
+  /**
+   * How many photos to arrange around the centre one on a turnover.
+   *
+   * Passed in rather than read from settings here: the reducer is a pure function
+   * and the preference lives in the renderer. Falls back to `RING_SIZE` so a
+   * caller with no preference (the tests, mostly) behaves as before.
+   */
+  ringSize?: number
 }
 
 const aspectOf = (photo: Photo): number =>
@@ -134,9 +190,10 @@ function layout(
   pool: readonly Photo[],
   viewport: { width: number; height: number },
   exclude: ReadonlySet<string>,
-  rng: () => number
+  rng: () => number,
+  ringSize: number = RING_SIZE
 ): { surrounding: Photo[]; boxes: ScatterBox[]; centreBox: Box } {
-  const candidates = pickRandom(pool, RING_SIZE, rng, exclude, (photo) => photo.id).map((photo) => ({
+  const candidates = pickRandom(pool, ringSize, rng, exclude, (photo) => photo.id).map((photo) => ({
     id: photo.id,
     aspect: aspectOf(photo)
   }))
@@ -166,9 +223,11 @@ export function showReducer(state: ShowState, action: ShowAction): ShowState {
 
       const rng = mulberry32(action.seed)
       const centre = pickRandom(action.pool, 1, rng)[0]
-      const ring = layout(centre, action.pool, action.viewport, new Set([centre.id]), rng)
+      const ringSize = action.ringSize ?? RING_SIZE
+      const ring = layout(centre, action.pool, action.viewport, new Set([centre.id]), rng, ringSize)
       return {
         ...empty,
+        ringSize,
         pool: [...action.pool],
         startedAt: now,
         lastPromotionAt: now,
@@ -186,8 +245,53 @@ export function showReducer(state: ShowState, action: ShowAction): ShowState {
       // next turnover take effect.
       return { ...state, pool: [...action.pool] }
 
+    case 'show/ringSize': {
+      const ringSize = clampRingSize(action.ringSize)
+      if (ringSize === state.ringSize) return state
+      if (!state.centre) return { ...state, ringSize }
+      /*
+       * Re-deal immediately rather than waiting for the next turnover.
+       *
+       * The setting is a live control, so the user has to see its effect while
+       * looking at it; deferring would make "30" and "90" look identical until a
+       * minute had passed. The photos already on screen are kept as the starting
+       * set, so shrinking the ring only removes cards and growing it only adds —
+       * the current batch does not reshuffle under the pointer.
+       *
+       * The fallen cards are cleared: a drop in flight belongs to the previous
+       * layout and would otherwise land on top of the new one.
+       */
+      const rng = mulberry32(state.seed + state.ringChanges * 7919 + state.promotions * 104729 + 17)
+      const centreBox = centreBoxFor(aspectOf(state.centre), state.viewport, CENTRE_FRACTION)
+      // Fewer candidates than the ring already holds means the extra cards go;
+      // more means the layout has room to place them.
+      const candidates = pickRandom(state.pool, ringSize, rng, new Set([state.centre.id]), (photo) => photo.id).map(
+        (photo) => ({ id: photo.id, aspect: aspectOf(photo) })
+      )
+      const boxes = scatterAround({ candidates, viewport: state.viewport, centre: centreBox, rng })
+      const byId = new Map(state.pool.map((photo) => [photo.id, photo]))
+      return {
+        ...state,
+        ringSize,
+        centreBox,
+        boxes,
+        surrounding: boxes
+          .map((box) => byId.get(box.id))
+          .filter((photo): photo is Photo => photo !== undefined),
+        falling: [],
+        fallingKey: 0
+      }
+    }
+
     case 'show/hover':
       return state.hovering === action.hovering ? state : { ...state, hovering: action.hovering }
+
+    case 'show/clearFalling':
+      // Ignore a clear for a drop that has already been superseded: the newer
+      // cards must not be removed early by a stale timer.
+      if (state.fallingKey !== action.key) return state
+      if (state.falling.length === 0) return state
+      return { ...state, falling: [], fallingKey: 0 }
 
     case 'show/resize': {
       if (!state.centre) return { ...state, viewport: action.viewport }
@@ -232,7 +336,33 @@ export function advance(state: ShowState, options: ShowOptions): ShowState {
     // a centre photo that is about to be replaced.
     const exclude = new Set([state.centre.id, ...state.surrounding.map((photo) => photo.id)])
     const rng = mulberry32(state.seed + (state.ringChanges + 1) * 7919 + now)
-    const ring = layout(state.centre, state.pool, state.viewport, exclude, rng)
+    const ring = layout(
+      state.centre,
+      state.pool,
+      state.viewport,
+      exclude,
+      rng,
+      options.ringSize ?? state.ringSize
+    )
+
+    /*
+     * The whole ring, not just the centre, leaves by falling out of the bottom.
+     *
+     * Everything on screen except the centre photo is thrown away on a turnover,
+     * so animating the removal as a single event — all of them dropping together —
+     * is what makes it read as "this batch ended" rather than as ninety separate
+     * photos flickering out. The centre is not thrown away: it survives the batch
+     * on purpose, so it must stay put.
+     *
+     * The boxes are the outgoing ones, captured before `layout` replaces them, so
+     * each card falls from where it actually was.
+     */
+    const byId = new Map(state.surrounding.map((photo) => [photo.id, photo]))
+    const falling: FallingCard[] = state.boxes.flatMap((box) => {
+      const photo = byId.get(box.id)
+      return photo ? [{ key: `${now}-${box.id}`, photo, box }] : []
+    })
+
     return {
       ...state,
       lastPromotionAt: now,
@@ -240,7 +370,11 @@ export function advance(state: ShowState, options: ShowOptions): ShowState {
       ringChanges: state.ringChanges + 1,
       centreBox: ring.centreBox,
       surrounding: ring.surrounding,
-      boxes: ring.boxes
+      boxes: ring.boxes,
+      falling,
+      // A fresh key per drop, so a card still animating from a previous drop
+      // cannot be mistaken for one of these.
+      fallingKey: falling.length > 0 ? now : 0
     }
   }
 
@@ -281,11 +415,19 @@ export function focusPhoto(state: ShowState, id: string, now = state.lastPromoti
   const [replacement] = pickRandom(state.pool, 1, rng, onScreen, (photo) => photo.id)
 
   const surrounding = replacement
-    ? state.surrounding.map((photo) => (photo.id === id ? replacement : photo))
+    ? [...state.surrounding.filter((photo) => photo.id !== id), replacement]
     : state.surrounding.filter((photo) => photo.id !== id)
 
-  // The new photo inherits the promoted photo's tile, so the ring does not
-  // reflow: one photo leaves, another takes its place in the same position.
+  /*
+   * The new photo keeps the promoted photo's tile, so the ring does not reflow:
+   * one photo leaves, another takes its place in the same position.
+   *
+   * Note that `boxes` and `surrounding` are deliberately in different orders.
+   * `boxes` is the layout — a box keeps its coordinates so the replacement
+   * appears where the promoted photo was. `surrounding` is the *queue*: index 0
+   * is the photo that has been on screen longest, which is the one `advance`
+   * promotes next. Appending the replacement is what makes that true.
+   */
   const boxes = replacement
     ? state.boxes.map((box) => (box.id === id ? { ...box, id: replacement.id } : box))
     : state.boxes.filter((box) => box.id !== id)

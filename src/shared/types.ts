@@ -60,6 +60,27 @@ export interface Filters {
 
 export const EMPTY_FILTERS: Filters = { from: '', to: '', text: '' }
 
+/**
+ * The bounds of the ring-size preference.
+ *
+ * Chosen from measurement rather than taste. The scatter cannot place more than
+ * about 63 cards in a 2560x1440 window before the overlap budget is exhausted, so
+ * 90 is already more candidates than the screen can take; going lower is the
+ * useful direction, because a smaller pool leaves bigger gaps and a calmer
+ * screen. 30 is the floor: below that the ring stops reading as a cloud around
+ * the centre photo.
+ */
+export const RING_SIZE_RANGE = { min: 30, max: 90 } as const
+
+/** Enough candidates to fill a large window, without being a memory concern. */
+export const DEFAULT_RING_SIZE = 70
+
+/** Clamp an arbitrary number into the supported range, rounding to a whole count. */
+export function clampRingSize(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_RING_SIZE
+  return Math.min(RING_SIZE_RANGE.max, Math.max(RING_SIZE_RANGE.min, Math.round(value)))
+}
+
 export interface Settings {
   lastDir: string
   layout: LayoutMode
@@ -97,6 +118,15 @@ export interface Settings {
    * broken. Persisted so it also survives a restart.
    */
   viewerInfo: boolean
+  /**
+   * How many photos the random show arranges around the centre one.
+   *
+   * The scatter drops whatever does not fit, so this is an upper bound rather
+   * than a promise: at 2560x1440 about 63 of 90 actually find a slot, and a
+   * smaller ring is what a screen that feels crowded needs. Bounded to
+   * `RING_SIZE_RANGE` so a hand-edited file cannot ask for a thousand cards.
+   */
+  ringSize: number
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -107,7 +137,8 @@ export const DEFAULT_SETTINGS: Settings = {
   locale: '',
   history: [],
   recursive: false,
-  viewerInfo: false
+  viewerInfo: false,
+  ringSize: DEFAULT_RING_SIZE
 }
 
 /**
