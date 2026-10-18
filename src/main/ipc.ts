@@ -26,6 +26,21 @@ export class PhotoLibrary {
   private dir = ''
   private watcher: DirectoryWatcher | null = null
   private thumbQueue: Promise<unknown> = Promise.resolve()
+  /**
+   * Incremented for every `open()`. A scan only applies its result if its token
+   * is still the newest, which is what stops a slow folder from overwriting a
+   * faster one the user opened after it.
+   */
+  private generation = 0
+  /** Abort controller for the scan currently in flight, if any. */
+  private scanning: AbortController | null = null
+  /**
+   * Signals of each scan, in the order they were started.
+   *
+   * Exposed for tests: an abandoned scan must be aborted, not merely ignored, or
+   * dropping three folders reads EXIF for two libraries nobody will ever see.
+   */
+  readonly scanSignals: AbortSignal[] = []
 
   constructor(
     readonly thumbCacheDir: string,
@@ -51,11 +66,35 @@ export class PhotoLibrary {
 
   /** Open a directory: scan it, start watching, and warm thumbnails in the background. */
   async open(dir: string, options: { recursive?: boolean } = {}): Promise<ScanResult> {
+    // A new open supersedes the one in flight. Cancel it before starting, so a
+    // slow scan of a large folder stops reading metadata the moment the user
+    // drops something else.
+    this.scanning?.abort()
+    const controller = new AbortController()
+    this.scanning = controller
+    this.scanSignals.push(controller.signal)
+
+    const generation = ++this.generation
     this.close()
     this.recursive = options.recursive === true
-    const result = await scanDirectory(dir, { cache: this.metadataCache, recursive: this.recursive })
+
+    const result = await scanDirectory(dir, {
+      cache: this.metadataCache,
+      recursive: this.recursive,
+      signal: controller.signal
+    })
+
+    // A later open has already taken over: this result is for a folder the user
+    // moved on from. Discarding it is what makes "the last folder you dropped"
+    // the one you actually see, regardless of which scan finishes first.
+    if (generation !== this.generation) return result
+
+    if (this.scanning === controller) this.scanning = null
     this.photos = result.photos
     this.dir = result.dir
+    // `close()` above detached the previous watcher; start the new one only
+    // once this scan is the winner, or an abandoned folder keeps a recursive
+    // watch open for the rest of the session.
     this.watcher = this.startWatching(result.dir)
     // No eager warm-up here. Generating renditions for every file made a large
     // folder take minutes before the wall felt usable, and most of those
