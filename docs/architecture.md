@@ -1,23 +1,31 @@
-﻿# 架构与实现
+# 架构与实现
 
 面向修改代码的人。使用与编译说明请见 [README](../README.md)。
 
-- [技术选型](#技术选型)
-- [实现细节](#实现细节)
-  - [拖动性能](#拖动性能)
-  - [滚动条预取](#滚动条预取)
-  - [拖入 / 命令行打开](#拖入--命令行打开)
-  - [EXIF 面板：一个被记住的偏好](#exif-面板一个被记住的偏好)
-  - [递归扫描](#递归扫描)
-  - [打开文件夹时的磁盘 I/O 与 Defender](#打开文件夹时的磁盘-io-与-defender)
-  - [EXIF 时区](#exif-时区)
-  - [文件锁](#文件锁)
-  - [设置文件 BOM](#设置文件-bom)
-  - [持久化时序](#持久化时序)
-  - [工具栏样式失效](#工具栏样式失效)
-- [测试策略](#测试策略)
-- [项目结构](#项目结构)
-- [添加语言](#添加语言)
+- [架构与实现](#架构与实现)
+  - [技术选型](#技术选型)
+  - [实现细节](#实现细节)
+    - [拖动性能](#拖动性能)
+    - [滚动条预取](#滚动条预取)
+    - [拖入 / 命令行打开](#拖入-命令行打开)
+    - [EXIF 面板：一个被记住的偏好](#exif-面板一个被记住的偏好)
+    - [递归扫描](#递归扫描)
+    - [打开文件夹时的磁盘 I/O 与 Defender](#打开文件夹时的磁盘-io-与-defender)
+    - [EXIF 时区](#exif-时区)
+    - [元数据缓存的作用域](#元数据缓存的作用域)
+    - [缩小的下限由内容决定](#缩小的下限由内容决定)
+    - [小图的 zoom 档位是冗余的](#小图的-zoom-档位是冗余的)
+    - [缩略图缓存分片](#缩略图缓存分片)
+    - [滚轮手势](#滚轮手势)
+    - [文件锁](#文件锁)
+    - [设置文件 BOM](#设置文件-bom)
+    - [持久化时序](#持久化时序)
+    - [工具栏样式失效](#工具栏样式失效)
+  - [测试策略](#测试策略)
+    - [用真实照片库校验](#用真实照片库校验)
+    - [端到端的边界](#端到端的边界)
+  - [项目结构](#项目结构)
+  - [添加语言](#添加语言)
 
 ## 技术选型
 
@@ -27,12 +35,23 @@
 | 缩略图 | `sharp`（libvips） | 实测 512px WebP 约 1.2 ms/张，比 `nativeImage.createThumbnailFromPath` 快 5.5 倍、体积小 10 倍 |
 | EXIF | `sharp.metadata()` + `exif-reader` | `exif-reader` 零依赖且仍在维护；`exifr` 已 4.5 年未更新 |
 | 元数据缓存 | `node:sqlite`（Electron 内置） | 不需要额外原生模块，也不必为几万行数据手写文件格式 |
+| 图像尺寸 | `image-size` | 从同一个 512 KB 前缀里拿宽高，EXIF 在这些导出里不含像素尺寸 |
 | 画布 | 单容器 CSS `transform` + 视口裁剪 | 见[拖动性能](#拖动性能) |
 | 文件监听 | Node 内置 `fs.watch` | 少一个依赖，避开 ESM/CJS 问题；本应用只面向 Windows |
 | 打包 | `@electron/packager` | `electron-builder` 会引入 8 个已知漏洞和 4 个弃用包 |
 | 类型系统 | TypeScript 7 | 原生 Go 实现，类型检查快一个数量级；迁移只需去掉 `baseUrl` 并显式声明 CSS 导入 |
 
-运行时依赖只有 `sharp` 和 `exif-reader` 两个。选型前的完整实测过程见 [research.md](./research.md)。
+主进程实际用到三个第三方包，它们被打包的方式不同：
+
+| 包 | 声明位置 | 打包方式 |
+|---|---|---|
+| `sharp` | `dependencies` | 原生二进制，需要从 `app.asar` 解包（`asar.unpack`） |
+| `exif-reader` | `dependencies` | 纯 JS，由 `externalizeDepsPlugin` 外部化后随 `node_modules` 一起进包 |
+| `image-size` | `devDependencies` | 纯 JS，体积小且无副作用，被 Vite 直接内联进 `out/main/index.js` |
+
+`image-size` 放在 `devDependencies` 是有意为之：它会被打进 bundle，运行时不需要在 `node_modules` 里找到它。若将来改成外部化，必须同时把它移到 `dependencies`，否则打包后会在启动时 `MODULE_NOT_FOUND`。
+
+选型前的完整实测过程见 [research.md](./research.md)。
 
 ## 实现细节
 
@@ -128,6 +147,36 @@
 
 `exif-reader` 把拍摄时间当作 UTC 构造 `Date`。必须用 `getUTC*` 读取，用本地时间访问器会让日期偏移一天。已用 3226 张真实照片验证：`getUTC*` 全部正确，本地访问器全部错误。
 
+### 元数据缓存的作用域
+
+`MetadataCache` 用一张 SQLite 表服务用户打开过的**所有**文件夹，所以清理时必须限定范围。
+
+早期实现是 `DELETE FROM photo_metadata WHERE path NOT IN (...)`，只传当前扫描到的路径。后果是**打开另一个文件夹会删光前一个文件夹的全部缓存行**——而「最近文件夹」菜单的全部意义就是来回切换。实测（`Export` 3226 张 / `Cosplay` 309 张）：
+
+| 操作 | 修复前 | 修复后 |
+|---|---|---|
+| 首次打开 Export | 3960 ms | 3960 ms |
+| 切到 Cosplay，再回 Export | **1387 ms** | **107 ms** |
+| 再次切到 Cosplay | 141 ms | **10 ms** |
+
+`retain(dir, paths)` 现在只处理 `dir` 下的行。两个 LIKE 前缀分别对应 `/` 和 `\`（数据库里是 Windows 路径，测试里是 POSIX 风格）；转义字符用 `!` 而不是 `\`，因为后者既是路径分隔符又是 SQL 的默认转义符。
+
+### 缩小的下限由内容决定
+
+滚轮能缩到多小不是风格问题，而是几何约束。缩放系数 `s` 下，墙面覆盖 `墙面积 × s²` 个屏幕像素；一旦小于窗口面积，**任何布局都填不满**，`clampWallTransform` 会把墙居中，表现为一条细带漂在空白里。3226 张时该下限是 `sqrt(窗口面积 / 墙面积) ≈ 0.0826`，而滚轮允许到 0.05。
+
+叠加的第二个约束是挂载上限：渲染层最多挂 `MAX_MOUNTED_TILES = 600` 个瓦片，超出的直接被丢弃——也就是「缩小后有些照片不显示」。两者叠加后，只有下限抬高到 **0.3118** 才既不丢图也不留白。
+
+`minScaleForTiles` 用二分法对真实布局求解，而非一个公式：可见瓦片数随缩放**不是平滑函数**，因为布局会按整列/整行重排。注意必须用与挂载**相同的 margin**（`CULL_MARGIN`）测量，否则会少算约三分之一，下限压低后上限依然被突破。
+
+还有一个更隐蔽的坑：缩略图**请求集合**曾与**挂载集合**用了两套规则（一个用 `max(宽,高)` 作 margin 并按布局顺序，另一个用 900px 固定 margin 并按中心距离截断）。两者几乎不重叠，导致挂载的 600 个瓦片**全部无图**。现在两者都来自 `useWall` 里同一次 `cullItems` 调用，由构造保证一致。
+
+### 小图的 zoom 档位是冗余的
+
+`buildThumbnail` 用 `withoutEnlargement`，所以原图小于 512px 时，`wall` 和 `zoom` 两档会编码出**同样的像素**，只是 WebP 质量不同。实测 300×200 的 JPEG：`wall` 200 B、`zoom` 192 B——两次编码、两个文件、一份信息。
+
+`zoomTierAddsDetail(width, height)` 判定长边是否超过 `wall` 档位，`effectiveLevel` 据此把这类照片的 `zoom` 请求重定向到 `wall` 文件。尺寸来自扫描时已解析的 `photo.width/height`，不需要额外读文件。尺寸未知时保守保留独立文件：多一个文件只费磁盘，少一个会让瓦片永远模糊。
+
 ### 缩略图缓存分片
 
 一个缓存目录服务用户打开过的**所有**文件夹，每张照片最多 2 个档位，所以文件数增长比照片数更快。扁平目录在 3 千个文件时还好，到十万级时枚举、删除和资源管理器都会变慢。
@@ -181,13 +230,13 @@ Windows 编辑器（记事本、PowerShell）会在 UTF-8 文件前加 BOM，`JS
 
 ```bash
 npm run typecheck        # 同时检查 main/preload 与 renderer
-npm run test             # 863 个单元/集成测试（48 个文件）
+npm run test             # 939 个单元/集成测试（56 个文件）
 npm run test:coverage    # 覆盖率门槛：70%
-npm run test:e2e         # 31 个 Playwright 端到端测试
+npm run test:e2e         # 32 个 Playwright 端到端测试
 npm run verify           # 以上全部
 ```
 
-覆盖率（当前）：语句 86.9%、分支 80.8%、函数 85.8%、行 89.4%。
+覆盖率（当前）：语句 90.2%、分支 82.4%、函数 89.3%、行 93.1%。
 
 分层：
 
@@ -234,7 +283,7 @@ src/
 │  └─ i18n/             语言上下文
 └─ shared/              主进程与渲染层共用
    ├─ layout.ts         三种布局算法
-   ├─ transform.ts      平移缩放数学（含边界钳制）
+   ├─ transform.ts      平移缩放数学（含边界钳制、缩放下限）
    ├─ cull.ts           视口裁剪 + 滚动目标预取
    ├─ scrollbar.ts      滚动条几何与日期映射
    ├─ keyboard.ts       键盘平移与方向键选择
@@ -243,28 +292,41 @@ src/
    ├─ filters.ts        筛选逻辑（含通配符匹配与转义）
    ├─ exif.ts           EXIF 展示分组与格式化
    ├─ gesture.ts        点击与拖拽判定
+   ├─ pinch.ts          双指缩放的状态机
+   ├─ wheel.ts          滚轮意图判定（平移 / 缩放）
+   ├─ thumbs.ts         缩略图档位、缓存键与 LOD 选层
+   ├─ date.ts           EXIF 日期规范化
    ├─ photoStore.ts     增删与统一排序规则
+   ├─ ipc.ts            IPC 通道名与协议主机常量
+   ├─ types.ts          跨进程共享类型与设置默认值
    └─ i18n/             消息目录与语言注册表
 ```
 
+渲染层还包含 `App.tsx`（组装与全局快捷键）和 `i18n/`（语言上下文与提供者）。
+
 ## 添加语言
 
-1. 在 `src/shared/i18n/locales/` 新建文件，导出类型为 `Catalog` 的目录：
+英文目录是唯一的来源，它定义在 `src/shared/i18n/messages.ts` 里，`Catalog` 类型由它推导——所以**漏译会在编译期报错**。
+
+1. 新建 `src/shared/i18n/locales/de.ts`：
 
 ```ts
 import type { Catalog } from '../messages'
 
 export const de: Catalog = {
-  // 复制 en.ts 的键并填入译文
+  // 复制 messages.ts 里 en 的键并填入译文
 }
 ```
 
-因为 `Catalog` 由英文目录推导，**漏译会在编译期报错**。
-
-2. 在 `locales/index.ts` 的 `BUILTIN_LOCALES` 中登记：
+2. 在 `src/shared/i18n/locales/index.ts` 中登记（同时记得在 `package.mjs` 的 `KEPT_LOCALES` 里加上对应的 Chromium 语言包，否则文件对话框等系统界面仍是英文）：
 
 ```ts
-{ id: 'de', label: 'Deutsch', catalog: de }
+import { de } from './de'
+
+export const BUILTIN_LOCALES: readonly LocaleDefinition[] = [
+  // ...
+  { id: 'de', label: 'Deutsch', catalog: de }
+]
 ```
 
 第三方也可在运行时注入，无需改源码：
