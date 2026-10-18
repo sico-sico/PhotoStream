@@ -1,7 +1,7 @@
-// @vitest-environment jsdom
+﻿// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, renderHook, waitFor } from '@testing-library/react'
-import type { Photo, Settings, ThumbLevel } from '@shared/types'
+import type { OpenDroppedResult, Photo, Settings, ThumbLevel } from '@shared/types'
 import { DEFAULT_SETTINGS } from '@shared/types'
 import { useWall } from './useWall'
 
@@ -122,6 +122,17 @@ function installApi(settings: Partial<Settings> = {}): void {
 }
 
 const viewport = { width: 1200, height: 800 }
+
+/** A promise whose settlement the test controls, for ordering two scans. */
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (error: unknown) => void } {
+  let resolve!: (value: T) => void
+  let reject!: (error: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
 
 beforeEach(() => {
   installApi()
@@ -327,6 +338,117 @@ describe('useWall', () => {
     })
   })
 
+  describe('overlapping opens', () => {
+    it('shows the folder opened last, even if its scan resolves first', async () => {
+      // Dragging three folders onto the window fires three opens in a row. The
+      // scans finish in whatever order the disk decides, and the wall must show
+      // the folder the user dropped last 鈥?not the one that happened to finish
+      // last.
+      const slowA = deferred<OpenDroppedResult>()
+      const fastB = deferred<OpenDroppedResult>()
+      api.openDropped
+        .mockImplementationOnce(() => slowA.promise)
+        .mockImplementationOnce(() => fastB.promise)
+
+      const { result } = renderHook(() => useWall(viewport))
+
+      let first: Promise<void>
+      act(() => {
+        first = result.current.openDropped('D:/a')
+        void result.current.openDropped('D:/b')
+      })
+
+      // The second drop is small and lands first.
+      await act(async () => {
+        fastB.resolve({ dir: 'D:/b', photos: [photo('b')], skipped: 0, durationMs: 1, photo: '' })
+        await fastB.promise
+      })
+      expect(result.current.state.dir).toBe('D:/b')
+
+      // The first drop then lands. It is stale: the user has moved on.
+      await act(async () => {
+        slowA.resolve({ dir: 'D:/a', photos: [photo('a')], skipped: 0, durationMs: 1, photo: '' })
+        await first!
+      })
+
+      expect(result.current.state.dir).toBe('D:/b')
+      expect(result.current.visiblePhotos.map((p) => p.id)).toEqual(['b'])
+    })
+
+    it('does not leave the wall stuck in a scanning state when a stale scan errors', async () => {
+      // The abandoned scan can fail after the user moved on 鈥?a folder is
+      // deleted, a drive is unplugged. Reporting that error would replace a
+      // perfectly good wall with an error message about a folder nobody asked
+      // for any more.
+      const slowA = deferred<OpenDroppedResult>()
+      const fastB = deferred<OpenDroppedResult>()
+      api.openDropped
+        .mockImplementationOnce(() => slowA.promise)
+        .mockImplementationOnce(() => fastB.promise)
+
+      const { result } = renderHook(() => useWall(viewport))
+
+      let first: Promise<void>
+      act(() => {
+        first = result.current.openDropped('D:/a')
+        void result.current.openDropped('D:/b')
+      })
+
+      await act(async () => {
+        fastB.resolve({ dir: 'D:/b', photos: [photo('b')], skipped: 0, durationMs: 1, photo: '' })
+        await fastB.promise
+      })
+
+      await act(async () => {
+        slowA.reject(new Error('EACCES: permission denied'))
+        await first!.catch(() => undefined)
+      })
+
+      expect(result.current.state.status).toBe('ready')
+      expect(result.current.state.dir).toBe('D:/b')
+      expect(result.current.state.errorMessage).toBe('')
+    })
+
+    it('lets the same folder be reopened after a stale scan resolved it', async () => {
+      // Guards the obvious wrong fix: an "ignore everything but the newest"
+      // flag that never clears would make the app unresponsive to every later
+      // open once a single scan was superseded.
+      const slowA = deferred<OpenDroppedResult>()
+      const fastB = deferred<OpenDroppedResult>()
+      const again = deferred<OpenDroppedResult>()
+      api.openDropped
+        .mockImplementationOnce(() => slowA.promise)
+        .mockImplementationOnce(() => fastB.promise)
+        .mockImplementationOnce(() => again.promise)
+
+      const { result } = renderHook(() => useWall(viewport))
+
+      let first: Promise<void>
+      act(() => {
+        first = result.current.openDropped('D:/a')
+        void result.current.openDropped('D:/b')
+      })
+      await act(async () => {
+        fastB.resolve({ dir: 'D:/b', photos: [photo('b')], skipped: 0, durationMs: 1, photo: '' })
+        await fastB.promise
+        slowA.resolve({ dir: 'D:/a', photos: [photo('a')], skipped: 0, durationMs: 1, photo: '' })
+        await first!
+      })
+
+      let third: Promise<void>
+      act(() => {
+        third = result.current.openDropped('D:/c')
+      })
+      await act(async () => {
+        again.resolve({ dir: 'D:/c', photos: [photo('c')], skipped: 0, durationMs: 1, photo: '' })
+        await third!
+      })
+
+      expect(result.current.state.dir).toBe('D:/c')
+      expect(result.current.visiblePhotos.map((p) => p.id)).toEqual(['c'])
+    })
+  })
+
   describe('derived state', () => {
     async function openWith(photos: Photo[]): Promise<ReturnType<typeof renderHook<ReturnType<typeof useWall>, unknown>>> {
       api.openDirectory.mockResolvedValue({ dir: '/photos', photos, skipped: 0, durationMs: 1 })
@@ -416,10 +538,71 @@ describe('useWall', () => {
       await waitFor(() => expect(result.current.thumbUrls.a).toContain('pic://thumb/'))
       // One round-trip per pass, not one per photo.
       expect(api.requestThumbs).toHaveBeenCalledTimes(1)
+      // `interactive` when idle: these are the tiles the user is looking at.
       expect(api.requestThumbs).toHaveBeenCalledWith(
         [expect.objectContaining({ id: 'a' })],
-        expect.any(String)
+        expect.any(String),
+        'interactive'
       )
+    })
+
+    it('asks for nothing from the viewport while a scroll target is pending', async () => {
+      // A drag brings a new band into view on every pointer event. Requesting
+      // each of those filled the four-slot encode queue with bands the thumb had
+      // already swept past, and the destination the drag was heading for sat
+      // behind all of them — a measured drag left all 84 mounted tiles blank for
+      // the whole 5 s window. Only the destination is requested while scrolling.
+      const many = Array.from({ length: 400 }, (_, i) => photo(`p${i}`, '2020-01-01', `${i}.jpg`))
+      api.openDirectory.mockResolvedValue({ dir: '/photos', photos: many, skipped: 0, durationMs: 1 })
+
+      const { result } = renderHook(() => useWall(viewport))
+      await act(async () => {
+        await result.current.chooseFolder()
+      })
+      await waitFor(() => expect(api.requestThumbs).toHaveBeenCalled())
+
+      api.requestThumbs.mockClear()
+      // Announce a destination, as the scrollbar does on pointerdown.
+      act(() => result.current.prefetchForScroll(3000))
+      // Zooming asks for a different rendition level for everything on screen,
+      // which is the request this effect would otherwise make.
+      act(() => result.current.setTransform((t) => ({ ...t, scale: 2 })))
+
+      // Let any pending timer run.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 200))
+      })
+
+      // Whatever went out is the prefetch, never a viewport batch.
+      for (const call of api.requestThumbs.mock.calls) {
+        expect(call[2]).toBe('background')
+      }
+    })
+
+    it('returns to asking for the viewport once the scroll has settled', async () => {
+      // The pause must not stick: after the jump lands, the visible band is the
+      // one that matters and has to load at interactive priority.
+      const many = Array.from({ length: 400 }, (_, i) => photo(`p${i}`, '2020-01-01', `${i}.jpg`))
+      api.openDirectory.mockResolvedValue({ dir: '/photos', photos: many, skipped: 0, durationMs: 1 })
+
+      const { result } = renderHook(() => useWall(viewport))
+      await act(async () => {
+        await result.current.chooseFolder()
+      })
+      await waitFor(() => expect(api.requestThumbs).toHaveBeenCalled())
+
+      act(() => result.current.prefetchForScroll(3000))
+      // Wait past SCROLL_SETTLE_MS so the wall leaves "scrolling" mode.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 400))
+      })
+
+      api.requestThumbs.mockClear()
+      act(() => result.current.setTransform((t) => ({ ...t, scale: 2 })))
+
+      await waitFor(() => expect(api.requestThumbs).toHaveBeenCalled())
+      const prios = api.requestThumbs.mock.calls.map((call) => call[2])
+      expect(prios).toContain('interactive')
     })
 
     it('only asks for photos inside the viewport', async () => {
@@ -460,7 +643,7 @@ describe('useWall', () => {
         emitThumbReady(['a', 'pic://photo/a.jpg', 'full'])
       })
 
-      // At the fitted zoom the wall wants `wall`, so that is what it shows —
+      // At the fitted zoom the wall wants `wall`, so that is what it shows 鈥?
       // the original is recorded but not displayed.
       expect(result.current.thumbLevel).toBe('wall')
       expect(result.current.thumbUrls.a).toBe('pic://thumb/a-wall.webp')

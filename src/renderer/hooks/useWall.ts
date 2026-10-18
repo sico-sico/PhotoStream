@@ -29,6 +29,15 @@ const PREFETCH_BATCH = 80
 const PREFETCH_DELAY_MS = 120
 
 /**
+ * How long after the last scroll target the wall returns to normal priority.
+ *
+ * Slightly longer than the 220 ms scroll animation, so the landing's own tiles
+ * are requested while still in "scrolling" mode and the switch back does not
+ * race the arrival.
+ */
+const SCROLL_SETTLE_MS = 300
+
+/**
  * Wires the renderer to the main process and derives everything the wall needs.
  *
  * All decisions worth testing live in `@shared/*`; this hook only sequences
@@ -306,18 +315,40 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
     }
   }, [])
 
+  /**
+   * Which scan the wall is currently waiting for.
+   *
+   * Every open bumps this. When a scan resolves, it only applies if no later
+   * open has started in the meantime — otherwise dropping several folders in a
+   * row leaves the wall showing whichever scan the disk finished last, which is
+   * not the folder the user dropped last.
+   */
+  const scanGeneration = useRef(0)
+
+  /** Claim the next scan slot. Call before the IPC, pair with `finishScan`. */
+  const beginScan = useCallback((): number => {
+    scanGeneration.current += 1
+    return scanGeneration.current
+  }, [])
+
+  /** Whether `generation` is still the newest scan. */
+  const finishScan = useCallback((generation: number): boolean => generation === scanGeneration.current, [])
+
   const openDirectory = useCallback(async (dir: string) => {
     dispatch({ type: 'scan/start', dir })
     requested.current.clear()
     renditionUrls.current.clear()
     setRenditionTick((value) => value + 1)
+    const generation = beginScan()
     try {
       const result = await window.photoStream.openDirectory(dir, recursiveRef.current)
+      if (!finishScan(generation)) return
       dispatch({ type: 'scan/success', dir: result.dir, photos: result.photos })
     } catch (error) {
+      if (!finishScan(generation)) return
       dispatch({ type: 'scan/error', message: error instanceof Error ? error.message : String(error) })
     }
-  }, [])
+  }, [beginScan, finishScan])
 
   const chooseFolder = useCallback(async () => {
     const dir = await window.photoStream.pickDirectory(localeRef.current)
@@ -363,35 +394,49 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
    * empty path means the drop carried no real file - a paste or an internal
    * drag - and is ignored rather than reported as an error.
    */
-  const openDropped = useCallback(async (path: string, options: { focus?: boolean } = {}) => {
-    if (!path) return
-    dispatch({ type: 'scan/start', dir: path })
-    requested.current.clear()
-    renditionUrls.current.clear()
-    setRenditionTick((value) => value + 1)
-    try {
-      const result = await window.photoStream.openDropped(path, recursiveRef.current)
-      dispatch({ type: 'scan/success', dir: result.dir, photos: result.photos })
+  const openDropped = useCallback(
+    async (path: string, options: { focus?: boolean } = {}) => {
+      if (!path) return
+      dispatch({ type: 'scan/start', dir: path })
+      requested.current.clear()
+      renditionUrls.current.clear()
+      setRenditionTick((value) => value + 1)
+      const generation = beginScan()
+      try {
+        const result = await window.photoStream.openDropped(path, recursiveRef.current)
+        // A later drop has taken over: this result is for a folder the user
+        // moved on from, so it must not replace the wall they are now looking
+        // at. Dropping several folders in a row is exactly this case — the
+        // scans finish in whatever order the disk decides.
+        if (!finishScan(generation)) return
+        dispatch({ type: 'scan/success', dir: result.dir, photos: result.photos })
 
-      // Focus the photo the user pointed at. `path` is absolute and photos are
-      // keyed by a lower-cased path, so the id is derived the same way the
-      // scanner does it rather than compared as strings.
-      if (result.photo) {
-        const focusId = result.photo.toLowerCase()
-        const target = result.photos.find((photo) => photo.id === focusId)
-        if (target) {
-          dispatch({ type: 'selection/focus', id: target.id })
-          // Open with details: the user pointed at a specific file from outside
-          // the app, so its metadata is part of what they asked about. A drop on
-          // the wall means the same thing. `options.focus === false` is used by
-          // the caller that wants the wall centred without the viewer.
-          if (options.focus !== false) dispatch({ type: 'viewer/openWithInfo' })
+        // Focus the photo the user pointed at. `path` is absolute and photos are
+        // keyed by a lower-cased path, so the id is derived the same way the
+        // scanner does it rather than compared as strings.
+        if (result.photo) {
+          const focusId = result.photo.toLowerCase()
+          const target = result.photos.find((photo) => photo.id === focusId)
+          if (target) {
+            dispatch({ type: 'selection/focus', id: target.id })
+            // Open with details: the user pointed at a specific file from
+            // outside the app, so its metadata is part of what they asked about.
+            // A drop on the wall means the same thing. `options.focus === false`
+            // is used by the caller that wants the wall centred without the
+            // viewer.
+            if (options.focus !== false) dispatch({ type: 'viewer/openWithInfo' })
+          }
         }
+      } catch (error) {
+        // An abandoned scan failing is not the user's problem: reporting it
+        // would replace a good wall with an error about a folder they have
+        // already moved on from.
+        if (!finishScan(generation)) return
+        dispatch({ type: 'scan/error', message: error instanceof Error ? error.message : String(error) })
       }
-    } catch (error) {
-      dispatch({ type: 'scan/error', message: error instanceof Error ? error.message : String(error) })
-    }
-  }, [])
+    },
+    [beginScan, finishScan]
+  )
 
   const openDroppedRef = useRef(openDropped)
   openDroppedRef.current = openDropped
@@ -446,19 +491,41 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
     return urls
   }, [visiblePhotos, thumbLevel, renditionTick])
 
-  // Ask for whatever is on screen that has not been requested yet.
+  /**
+   * Ask for whatever is on screen that has not been requested yet.
+   *
+   * Normally `interactive`: these are the tiles the user is looking at, and the
+   * main process must serve them before any speculative work.
+   *
+   * While a scroll target is pending it asks for nothing at all. A drag emits a
+   * transform per pointer event and each one brings a fresh band into view, so
+   * this effect fired tens of times a second with ~70 photos each — measured at
+   * 30+ batches of 60–80 tiles during a single sweep. The main process encodes
+   * four images at a time, so those bands did not arrive sooner; they filled the
+   * queue, and the destination the drag was heading for sat behind all of them.
+   * A measured drag left all 84 mounted tiles blank for the full 5 s window,
+   * even with the requests demoted to `background`.
+   *
+   * So during a scroll the destination is the only thing requested (by the
+   * prefetch below), and the bands the thumb swept past are simply skipped: they
+   * are not what the user is about to look at. Once the scroll settles,
+   * `scrollTargetY` clears and this effect loads the final band at interactive
+   * priority, which is the view that actually matters.
+   */
   useEffect(() => {
+    if (scrollTargetY !== null) return
+
     const pending = visiblePhotos
       .filter((photo) => visibleIds.has(photo.id) && !requested.current.has(`${photo.id}:${thumbLevel}`))
       .slice(0, 400)
     if (pending.length === 0) return
 
     for (const photo of pending) requested.current.add(`${photo.id}:${thumbLevel}`)
-    void window.photoStream.requestThumbs(pending, thumbLevel).catch(() => {
+    void window.photoStream.requestThumbs(pending, thumbLevel, 'interactive').catch(() => {
       // Allow a later pass to retry if the IPC itself failed.
       for (const photo of pending) requested.current.delete(`${photo.id}:${thumbLevel}`)
     })
-  }, [visiblePhotos, visibleIds, thumbLevel])
+  }, [visiblePhotos, visibleIds, thumbLevel, scrollTargetY])
 
   /**
    * Prefetch the destination of a scrollbar jump.
@@ -509,6 +576,24 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
 
     return () => window.clearTimeout(timer)
   }, [scrollTargetY, layout.items, thumbLevel, visiblePhotos, transform.scale])
+
+  /**
+   * Leave "scrolling" mode once the destination has stopped moving.
+   *
+   * `scrollTargetY` doubles as the signal that a scroll is in flight: while it is
+   * set, the viewport effect demotes its requests to `background` so the prefetch
+   * can win the queue. It has to be cleared afterwards, or every later request
+   * would stay demoted and ordinary panning would load at speculative priority.
+   *
+   * A settle delay rather than clearing inside the prefetch: a drag re-targets on
+   * every pointer event, and clearing there would flap in and out of the mode
+   * dozens of times a second.
+   */
+  useEffect(() => {
+    if (scrollTargetY === null) return
+    const timer = window.setTimeout(() => setScrollTargetY(null), SCROLL_SETTLE_MS)
+    return () => window.clearTimeout(timer)
+  }, [scrollTargetY])
 
   const prefetchForScroll = useCallback((targetY: number) => setScrollTargetY(targetY), [])
 
