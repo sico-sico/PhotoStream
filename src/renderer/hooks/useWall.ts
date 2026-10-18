@@ -122,6 +122,16 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
    * on every toggle.
    */
   const recursiveRef = useRef(false)
+  /**
+   * Whether the user has opened a folder themselves.
+   *
+   * `loadSettings` is async, so a drop that lands in the first moments after
+   * launch is processed *before* the restore gets to reopen `lastDir`. Without
+   * this flag the restore would then be the newest open and silently replace the
+   * folder the user had just dropped — the "quick drag sometimes does nothing"
+   * report.
+   */
+  const userOpenedRef = useRef(false)
   /** Latest reducer state, for callbacks that must not be re-created per change. */
   const stateRef = useRef(state)
   stateRef.current = state
@@ -255,7 +265,15 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
       dispatch({ type: 'history/set', history: settings.history ?? [] })
       recursiveRef.current = settings.recursive === true
       dispatch({ type: 'recursive/set', recursive: recursiveRef.current })
-      if (settings.lastDir) await openDirectory(settings.lastDir)
+      // Only reopen the remembered folder if the user has not opened one
+      // themselves already. `loadSettings` is async, so a folder dragged in
+      // right after launch arrives before this point — and reopening `lastDir`
+      // afterwards is a *later* open, which would win and silently replace the
+      // folder the user had just dropped. That is the "quick drag does nothing"
+      // report.
+      if (settings.lastDir && !userOpenedRef.current) {
+        await openDirectory(settings.lastDir, { user: false })
+      }
     })()
       .catch(() => {
         // `openDirectory` already records its own failure in state; this catch
@@ -334,21 +352,28 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
   /** Whether `generation` is still the newest scan. */
   const finishScan = useCallback((generation: number): boolean => generation === scanGeneration.current, [])
 
-  const openDirectory = useCallback(async (dir: string) => {
-    dispatch({ type: 'scan/start', dir })
-    requested.current.clear()
-    renditionUrls.current.clear()
-    setRenditionTick((value) => value + 1)
-    const generation = beginScan()
-    try {
-      const result = await window.photoStream.openDirectory(dir, recursiveRef.current)
-      if (!finishScan(generation)) return
-      dispatch({ type: 'scan/success', dir: result.dir, photos: result.photos })
-    } catch (error) {
-      if (!finishScan(generation)) return
-      dispatch({ type: 'scan/error', message: error instanceof Error ? error.message : String(error) })
-    }
-  }, [beginScan, finishScan])
+  const openDirectory = useCallback(
+    async (dir: string, options: { user?: boolean } = {}) => {
+      // Defaults to a user action: every caller except the startup restore is
+      // one. The restore passes `user: false` so a folder dropped during launch
+      // is not then replaced by the remembered one.
+      if (options.user !== false) userOpenedRef.current = true
+      dispatch({ type: 'scan/start', dir })
+      requested.current.clear()
+      renditionUrls.current.clear()
+      setRenditionTick((value) => value + 1)
+      const generation = beginScan()
+      try {
+        const result = await window.photoStream.openDirectory(dir, recursiveRef.current)
+        if (!finishScan(generation)) return
+        dispatch({ type: 'scan/success', dir: result.dir, photos: result.photos })
+      } catch (error) {
+        if (!finishScan(generation)) return
+        dispatch({ type: 'scan/error', message: error instanceof Error ? error.message : String(error) })
+      }
+    },
+    [beginScan, finishScan]
+  )
 
   const chooseFolder = useCallback(async () => {
     const dir = await window.photoStream.pickDirectory(localeRef.current)
@@ -397,6 +422,8 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
   const openDropped = useCallback(
     async (path: string, options: { focus?: boolean } = {}) => {
       if (!path) return
+      // A drop is always the user asking for this folder.
+      userOpenedRef.current = true
       dispatch({ type: 'scan/start', dir: path })
       requested.current.clear()
       renditionUrls.current.clear()

@@ -64,24 +64,51 @@ export class PhotoLibrary {
    */
   private recursive = false
 
-  /** Open a directory: scan it, start watching, and warm thumbnails in the background. */
-  async open(dir: string, options: { recursive?: boolean } = {}): Promise<ScanResult> {
-    // A new open supersedes the one in flight. Cancel it before starting, so a
-    // slow scan of a large folder stops reading metadata the moment the user
-    // drops something else.
+  /**
+   * Claim the right to open the library.
+   *
+   * Called *before* anything that awaits. Resolving a dropped path does a
+   * `stat`, which can be slow on a sleeping drive or a network share; claiming
+   * afterwards made the token follow the order the `stat` calls finished rather
+   * than the order the user dropped the folders, so dropping A then B could end
+   * up showing A.
+   *
+   * Aborts whatever scan was already running: the user has moved on, and reading
+   * metadata for a library nobody will see is pure waste.
+   */
+  claim(): { generation: number; signal: AbortSignal } {
     this.scanning?.abort()
     const controller = new AbortController()
     this.scanning = controller
     this.scanSignals.push(controller.signal)
+    return { generation: ++this.generation, signal: controller.signal }
+  }
 
-    const generation = ++this.generation
+  /**
+   * Open a directory: scan it, start watching, and warm thumbnails in the
+   * background.
+   *
+   * @param options.generation from `claim`, when the caller awaited something
+   *   before getting here. Omit it to claim now.
+   */
+  async open(
+    dir: string,
+    options: { recursive?: boolean; generation?: number; signal?: AbortSignal } = {}
+  ): Promise<ScanResult> {
+    // Claiming here keeps every caller that has nothing to await working. The
+    // drop handler passes its own generation instead, because its token has to
+    // predate the `stat` it already awaited.
+    const claim = options.generation === undefined ? this.claim() : null
+    const generation = claim?.generation ?? options.generation!
+    const signal = claim?.signal ?? options.signal
+
     this.close()
     this.recursive = options.recursive === true
 
     const result = await scanDirectory(dir, {
       cache: this.metadataCache,
       recursive: this.recursive,
-      signal: controller.signal
+      signal
     })
 
     // A later open has already taken over: this result is for a folder the user
@@ -89,7 +116,9 @@ export class PhotoLibrary {
     // the one you actually see, regardless of which scan finishes first.
     if (generation !== this.generation) return result
 
-    if (this.scanning === controller) this.scanning = null
+    // Only the winner clears the in-flight scan, so a stale open cannot make a
+    // newer one look finished.
+    if (signal?.aborted !== true) this.scanning = null
     this.photos = result.photos
     this.dir = result.dir
     // `close()` above detached the previous watcher; start the new one only
@@ -187,8 +216,16 @@ export class PhotoLibrary {
   }
 
   private startWatching(dir: string): DirectoryWatcher {
+    // The generation this watcher belongs to. `fs.watch` delivers events
+    // asynchronously and the handler below awaits `stat` plus an EXIF read, so a
+    // batch can still be in flight when the user opens a different folder. Those
+    // results used to be folded into the *new* library, splicing a file from the
+    // previous folder into the wall that had just been opened.
+    const generation = this.generation
     return watchDirectory(dir, {
       onEvents: (events) => {
+        if (generation !== this.generation) return
+
         // The watcher is always recursive, so it sees subfolders whether or not
         // they are part of the library. Filtering here keeps the scan and the
         // watcher consistent: with the setting off, a new file in a subfolder
@@ -199,6 +236,9 @@ export class PhotoLibrary {
 
         if (relevant.length === 0) return
         void this.resolveEvents(relevant).then(({ touched, removed }) => {
+          // Re-check after the awaits: the user can open another folder while
+          // the metadata is being read.
+          if (generation !== this.generation) return
           // A deletion changes the wall without producing a photo to thumbnail.
           if (touched.length === 0 && !removed) return
           // New photos need thumbnails; changed ones need theirs rebuilt.
@@ -206,7 +246,10 @@ export class PhotoLibrary {
           this.notify(IPC.photosChanged, { kind: 'delta', photos: this.photos })
         })
       },
-      onError: (error) => this.notify(IPC.photosChanged, { kind: 'error', message: error.message })
+      onError: (error) => {
+        if (generation !== this.generation) return
+        this.notify(IPC.photosChanged, { kind: 'error', message: error.message })
+      }
     })
   }
 
@@ -319,8 +362,13 @@ export function registerIpc(deps: IpcDeps): void {
   ipcMain.handle(
     IPC.openDropped,
     async (_event, target: string, recursive?: boolean): Promise<OpenDroppedResult> => {
+      // Claim before resolving: `resolveOpenTarget` does a `stat`, which can be
+      // slow on a sleeping drive. Claiming afterwards would order the opens by
+      // when their `stat` finished rather than by when the user dropped them,
+      // so dropping A then B could leave A on screen.
+      const { generation, signal } = deps.library.claim()
       const resolved = await resolveOpenTarget(target)
-      const result = await deps.library.open(resolved.dir, { recursive })
+      const result = await deps.library.open(resolved.dir, { recursive, generation, signal })
       return { ...result, photo: resolved.photo }
     }
   )

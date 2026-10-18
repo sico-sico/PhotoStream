@@ -166,6 +166,50 @@ describe('useWall', () => {
       await waitFor(() => expect(api.openDirectory).toHaveBeenCalledWith('/last', false))
     })
 
+    it('does not let the restored folder win over a drop made during startup', async () => {
+      // `loadSettings` is async, so a folder dragged in right after launch can
+      // arrive before the restore has decided to reopen `lastDir`. Whichever
+      // resolves later would otherwise win, which is why a quick drop
+      // occasionally appeared to do nothing: the wall restored the previous
+      // folder over it.
+      installApi({ lastDir: '/last' })
+      const loading = deferred<Settings>()
+      api.loadSettings.mockReturnValue(loading.promise)
+
+      const { result } = renderHook(() => useWall(viewport))
+
+      // The user drops a folder before settings have loaded.
+      api.openDropped.mockResolvedValue({
+        dir: 'D:/dropped',
+        photos: [photo('d')],
+        skipped: 0,
+        durationMs: 1,
+        photo: ''
+      })
+      await act(async () => {
+        await result.current.openDropped('D:/dropped')
+      })
+      expect(result.current.state.dir).toBe('D:/dropped')
+
+      // Settings now arrive and try to reopen the remembered folder.
+      await act(async () => {
+        loading.resolve({ ...DEFAULT_SETTINGS, lastDir: '/last' })
+        await loading.promise
+      })
+
+      expect(result.current.state.dir).toBe('D:/dropped')
+      expect(api.openDirectory).not.toHaveBeenCalledWith('/last', expect.anything())
+    })
+
+    it('still restores the last folder when nothing was dropped', async () => {
+      // The guard above must not disable the restore itself.
+      installApi({ lastDir: '/last' })
+      api.openDirectory.mockResolvedValue({ dir: '/last', photos: [photo('l')], skipped: 0, durationMs: 1 })
+
+      const { result } = renderHook(() => useWall(viewport))
+      await waitFor(() => expect(result.current.state.dir).toBe('/last'))
+    })
+
     it('does not reopen anything when no directory was stored', async () => {
       renderHook(() => useWall(viewport))
       await waitFor(() => expect(api.loadSettings).toHaveBeenCalled())
