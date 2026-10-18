@@ -9,6 +9,7 @@ import {
   containSize,
   fitTransform,
   fitWallTransform,
+  minScaleForWall,
   normalizeRotation,
   panBy,
   rotatedSize,
@@ -22,8 +23,44 @@ import {
   zoomViewerAbout
 } from './transform'
 
-describe('screen/world conversion', () => {
-  const t = { scale: 2, x: 100, y: 50 }
+describe('minScaleForWall', () => {
+  it('is the scale at which the wall area exactly covers the window', () => {
+    // area * s^2 = windowArea  =>  s = sqrt(windowArea / wallArea)
+    const floor = minScaleForWall(1600, 140230, 1600, 956)
+    expect(floor * floor * (1600 * 140230)).toBeCloseTo(1600 * 956, 2)
+  })
+
+  it('never drops below the generic minimum', () => {
+    // A wall far larger than the window needs a floor well above `MIN_SCALE`; the
+    // generic minimum is only the lower bound of that formula.
+    expect(minScaleForWall(1600, 140230, 1600, 956)).toBeGreaterThan(MIN_SCALE)
+    // An empty wall falls back to it.
+    expect(minScaleForWall(0, 0, 1600, 956)).toBe(MIN_SCALE)
+  })
+
+  it('never exceeds 1, so a small wall can still be zoomed out', () => {
+    // Returning more than 1 would forbid zooming out on a small library and
+    // would break `fitToView`, which legitimately scales below 1.
+    expect(minScaleForWall(1600, 2000, 1600, 956)).toBeLessThanOrEqual(1)
+    expect(minScaleForWall(10, 10, 1600, 956)).toBeLessThanOrEqual(1)
+  })
+
+  it('is higher for a taller wall, which covers more area per scaled pixel', () => {
+    const tall = minScaleForWall(1600, 200_000, 1600, 956)
+    const short = minScaleForWall(1600, 20_000, 1600, 956)
+    expect(tall).toBeLessThan(short)
+  })
+
+  it('falls back to the generic minimum for unknown geometry', () => {
+    // Before the first layout, dimensions are zero; a nonsense floor would pin
+    // the wall and make the wheel appear dead.
+    expect(minScaleForWall(0, 0, 1600, 956)).toBe(MIN_SCALE)
+    expect(minScaleForWall(1600, 0, 1600, 956)).toBe(MIN_SCALE)
+    expect(minScaleForWall(1600, 1000, 0, 0)).toBe(MIN_SCALE)
+  })
+})
+
+describe('screen/world conversion', () => {  const t = { scale: 2, x: 100, y: 50 }
 
   it('round-trips a point', () => {
     const world = screenToWorld(t, 340, 250)

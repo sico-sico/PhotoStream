@@ -4,7 +4,7 @@ import { DEFAULT_SETTINGS, DEFAULT_SORT } from '@shared/types'
 import { applyFilters } from '@shared/filters'
 import { computeLayout } from '@shared/layout'
 import { pickThumbLevel, REFERENCE_TILE } from '@shared/thumbs'
-import { clampWallTransform, fitWallTransform, type Transform } from '@shared/transform'
+import { clampWallTransform, fitWallTransform, minScaleForWall, type Transform } from '@shared/transform'
 import { reanchorTransform } from '@shared/reanchor'
 import { prefetchIdsForScroll } from '@shared/cull'
 import { INITIAL_STATE, reducer } from '../state/wallReducer'
@@ -144,6 +144,34 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
   const visiblePhotos = useMemo(() => applyFilters(state.photos, state.filters), [state.photos, state.filters])
 
   /**
+   * The wall laid out for a plain window, with no zoom compensation.
+   *
+   * Its *area* is what sets the zoom-out floor. Area is essentially invariant
+   * under reflow — the same photos cover the same total space whether they are
+   * laid out wide or narrow — so measuring it here, at a width that does not
+   * depend on the zoom, is what breaks the circular dependency between the
+   * scale, the layout width and the floor.
+   */
+  const baseLayout = useMemo(
+    () => computeLayout(visiblePhotos, { mode: state.layout, containerWidth: Math.max(320, viewport.width) }),
+    [visiblePhotos, state.layout, viewport.width]
+  )
+
+  /**
+   * Smallest zoom that can still fill the window with this wall.
+   *
+   * Zooming out below it shows the wall as a thin band centred in empty space,
+   * because the wall's total area is fixed: scaling by `s` covers `area * s²`
+   * screen pixels, and once that is smaller than the window no layout can fill
+   * it. Measured on 3226 photos: 0.0826 here, against the 0.05 that produced a
+   * 1600x329 wall in a 1600x956 window.
+   */
+  const minScale = useMemo(
+    () => minScaleForWall(baseLayout.width, baseLayout.height, viewport.width, viewport.height),
+    [baseLayout.height, baseLayout.width, viewport.height, viewport.width]
+  )
+
+  /**
    * Width the wall is laid out for, in world units.
    *
    * Normally the viewport width, so rows break at the window edge. When zoomed
@@ -154,12 +182,16 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
    *
    * Zooming in is deliberately excluded: it would reflow the whole library while
    * the user is inspecting one photo, and at that point there is nothing to fill.
+   *
+   * The scale is floored at `minScale` first, so this never widens past the point
+   * where the wall could still cover the window.
    */
   const layoutWidth = useMemo(() => {
     const base = Math.max(320, viewport.width)
-    if (!(transform.scale < 1)) return base
-    return Math.round(base / transform.scale)
-  }, [transform.scale, viewport.width])
+    const effective = Math.max(transform.scale, minScale)
+    if (!(effective < 1)) return base
+    return Math.round(base / effective)
+  }, [transform.scale, minScale, viewport.width])
 
   // The wall spans the width it is laid out for, so rows break at the window edge.
   const layout = useMemo(
@@ -665,15 +697,24 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
    * here, so clamping at this one point is what guarantees no caller can leave
    * the wall showing empty space. Wrapping `setTransform` rather than each call
    * site also means a future caller cannot forget it.
+   *
+   * The scale floor is content-derived, not just `MIN_SCALE`: zooming out far
+   * enough makes the reflowed wall shorter than the window, and no layout can fix
+   * that once the scaled wall's area is smaller than the window's. Clamping here
+   * is what stops the wall becoming a thin band lost in empty space.
    */
   const clampedSetTransform = useCallback<React.Dispatch<React.SetStateAction<Transform>>>(
     (value) => {
       setTransform((previous) => {
         const next = typeof value === 'function' ? (value as (p: Transform) => Transform)(previous) : value
-        return clampWallTransform(next, layout.width, layout.height, viewportRef.current.width, viewportRef.current.height)
+        const { width, height } = viewportRef.current
+        // `minScale` comes from the un-zoomed layout's area, so it does not
+        // depend on the transform being written here.
+        const floored = next.scale < minScale ? { ...next, scale: minScale } : next
+        return clampWallTransform(floored, layout.width, layout.height, width, height)
       })
     },
-    [layout.height, layout.width]
+    [layout.height, layout.width, minScale]
   )
 
   return {

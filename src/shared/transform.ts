@@ -31,6 +31,44 @@ export const MIN_FIT_SCALE = 0.22
 
 export const IDENTITY: Transform = { scale: 1, x: 0, y: 0 }
 
+/**
+ * The smallest zoom at which a wall of this size can still fill the window.
+ *
+ * Zooming out reflows the wall so the columns keep filling the window: the layout
+ * is computed for `viewportWidth / scale` world pixels, which keeps the *width*
+ * covered at any zoom. Height is not compensated for — it follows from how many
+ * rows the photos make, and a wider layout means fewer rows. Past a point the
+ * scaled wall is shorter than the window, `clampWallTransform` centres it, and
+ * the result is a thin horizontal band floating in empty space. Measured on the
+ * 3226-photo library: at scale 0.05 the wall is 1600x329 inside a 1600x956
+ * window, which is the "layout looks broken when zoomed right out" report.
+ *
+ * No layout can avoid this below a certain scale, because the wall's total area
+ * is fixed: scaling by `s` covers `area * s²` screen pixels, so covering the
+ * window requires `s >= sqrt(windowArea / wallArea)`. That bound is what this
+ * returns — the content-preserving floor on zoom-out.
+ *
+ * Never exceeds `MIN_FIT_SCALE`-style limits: it is a floor for the *content*,
+ * applied on top of `MIN_SCALE`. A library with few photos returns that same
+ * `MIN_SCALE` cap, since a small wall can still be spread over the window by the
+ * width compensation.
+ */
+export function minScaleForWall(
+  worldWidth: number,
+  worldHeight: number,
+  viewportWidth: number,
+  viewportHeight: number,
+  floor = MIN_SCALE
+): number {
+  if (!(worldWidth > 0) || !(worldHeight > 0)) return floor
+  if (!(viewportWidth > 0) || !(viewportHeight > 0)) return floor
+  const needed = Math.sqrt((viewportWidth * viewportHeight) / (worldWidth * worldHeight))
+  // Also capped at 1: a wall smaller than the window needs no zoom-out floor at
+  // all, and returning >1 would forbid the user from zooming out even slightly
+  // (and would break `fitToView`, which legitimately scales below 1).
+  return Math.min(1, Math.max(floor, needed))
+}
+
 export function clamp(value: number, min: number, max: number): number {
   if (Number.isNaN(value)) return min
   return Math.min(Math.max(value, min), max)
