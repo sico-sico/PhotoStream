@@ -832,6 +832,11 @@ body {
   border-radius: 3px;
 }
 
+/* The value half of an `about-source` row: a path or a name, not a label. */
+.about-source > :not(span:first-child) {
+  color: var(--text);
+}
+
 .about-section h3 {
   margin: 0 0 8px;
   font-size: 12px;

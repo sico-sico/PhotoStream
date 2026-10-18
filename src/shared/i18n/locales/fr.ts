@@ -99,6 +99,8 @@ export const fr: Catalog = {
   'about.chromium': 'Chromium {version}',
   'about.source': 'Code source',
   'about.reportIssue': 'Signaler un problème',
+  'about.author': 'Écrit par',
+  'about.authorValue': 'GitHub Copilot (DeepSeek V4 Flash)',
   'about.dataLocation': 'Dossier de données',
   'about.shortcuts': 'Raccourcis clavier',
   'about.shortcutPan': 'Flèches — déplacer le mur',

@@ -99,6 +99,8 @@ export const zhCN: Catalog = {
   'about.chromium': 'Chromium {version}',
   'about.source': '源代码',
   'about.reportIssue': '反馈问题',
+  'about.author': '代码作者',
+  'about.authorValue': 'GitHub Copilot（DeepSeek V4 Flash）',
   'about.dataLocation': '数据目录',
   'about.shortcuts': '键盘快捷键',
   'about.shortcutPan': '方向键 — 平移照片墙',

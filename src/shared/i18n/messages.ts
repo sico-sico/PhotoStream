@@ -108,6 +108,8 @@ export const en = {
   'about.chromium': 'Chromium {version}',
   'about.source': 'Source code',
   'about.reportIssue': 'Report an issue',
+  'about.author': 'Written by',
+  'about.authorValue': 'GitHub Copilot (DeepSeek V4 Flash)',
   'about.dataLocation': 'Data folder',
   'about.shortcuts': 'Keyboard shortcuts',
   'about.shortcutPan': 'Arrow keys — pan the wall',

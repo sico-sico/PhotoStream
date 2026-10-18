@@ -53,6 +53,20 @@ describe('AboutDialog', () => {
     expect(link).toHaveAttribute('href', 'https://github.com/sico-sico/PhotoStream')
   })
 
+  it('credits the model that wrote the code', () => {
+    // Honest attribution for a codebase generated end to end, and a hint about
+    // whose quirks a bug report is dealing with.
+    renderDialog()
+    expect(screen.getByText('Written by')).toBeInTheDocument()
+    expect(screen.getByText('GitHub Copilot (DeepSeek V4 Flash)')).toBeInTheDocument()
+  })
+
+  it('translates the credit line', () => {
+    renderDialog('zh-CN')
+    expect(screen.getByText('代码作者')).toBeInTheDocument()
+    expect(screen.getByText('GitHub Copilot（DeepSeek V4 Flash）')).toBeInTheDocument()
+  })
+
   it('opens the repository in the real browser, not in the app window', () => {
     // The main process denies in-window navigation, so the link must target a
     // new window for `setWindowOpenHandler` to hand it to `shell.openExternal`.

@@ -109,6 +109,18 @@ export function AboutDialog({ onClose }: AboutDialogProps): React.JSX.Element {
           </a>
         </p>
 
+        {/**
+         * Attribution.
+         *
+         * Not decorative: it is the honest answer to "who wrote this" for a
+         * codebase that was generated end to end, and it tells a reader whose
+         * bug reports and quirks they are dealing with.
+         */}
+        <p className="about-source">
+          <span>{t('about.author')}</span>
+          <span dir="ltr">{t('about.authorValue')}</span>
+        </p>
+
         <section className="about-section">
           <h3>{t('about.shortcuts')}</h3>
           <dl className="about-shortcuts">
