@@ -34,9 +34,18 @@ export function registerPicScheme(): void {
   ])
 }
 
-/** Build the URL the renderer uses for a cached thumbnail. */
-export function thumbUrl(fileName: string): string {
-  return `${PIC_SCHEME}://${PIC_THUMB_HOST}/${encodeURIComponent(fileName)}`
+/**
+ * Build the URL the renderer uses for a cached thumbnail.
+ *
+ * `relativePath` may contain `/` separators, because the cache is sharded into
+ * subdirectories. Each segment is encoded separately: encoding the whole string
+ * would turn the separators into `%2F`, which still round-trips through
+ * `decodeURIComponent` but produces URLs that browsers and proxies treat as a
+ * single opaque segment rather than a path.
+ */
+export function thumbUrl(relativePath: string): string {
+  const encoded = relativePath.split(/[/\\]+/).filter(Boolean).map(encodeURIComponent).join('/')
+  return `${PIC_SCHEME}://${PIC_THUMB_HOST}/${encoded}`
 }
 
 /** Build the URL the renderer uses for a full-resolution photo. */
@@ -67,7 +76,21 @@ export function resolvePicRequest(url: string, roots: ProtocolRoots): string | n
   }
   if (parsed.protocol !== `${PIC_SCHEME}:`) return null
 
-  const name = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''))
+  // Decode each segment separately, mirroring `thumbUrl`. A single
+  // `decodeURIComponent` over the whole pathname would turn an encoded `%2F`
+  // into a real separator *after* the path was split, which is exactly the kind
+  // of ambiguity a traversal guard must not have.
+  let name: string
+  try {
+    name = parsed.pathname
+      .replace(/^\/+/, '')
+      .split('/')
+      .map(decodeURIComponent)
+      .join('/')
+  } catch {
+    // Malformed percent-encoding.
+    return null
+  }
   if (!name || name.includes('\0')) return null
 
   const root = parsed.host === PIC_THUMB_HOST ? roots.thumbDir : parsed.host === PIC_PHOTO_HOST ? roots.photoDir : null

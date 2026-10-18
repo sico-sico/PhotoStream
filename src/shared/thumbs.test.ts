@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { THUMB_SIZES, hash64, pickThumbLevel, thumbKey } from './thumbs'
+import { THUMB_SHARD_DEPTH, THUMB_SIZES, hash64, pickThumbLevel, thumbKey } from './thumbs'
 
 describe('pickThumbLevel', () => {
   it('uses the wall level for tiles smaller than the wall rendition', () => {
@@ -106,5 +106,42 @@ describe('thumbKey', () => {
 
   it('differs between levels of the same file', () => {
     expect(thumbKey('/p/a.jpg', 1000, 500, 'wall')).not.toBe(thumbKey('/p/a.jpg', 1000, 500, 'zoom'))
+  })
+
+  it('returns a two-level sharded relative path', () => {
+    // `a/b/<hash>-<level>.webp`. The shard comes from the hash, so the same
+    // photo always lands in the same leaf directory and lookups stay O(1).
+    const key = thumbKey('/p/a.jpg', 1000, 500, 'wall')
+    const segments = key.split('/')
+    expect(segments).toHaveLength(THUMB_SHARD_DEPTH + 1)
+    expect(segments[0]).toMatch(/^[0-9a-f]$/)
+    expect(segments[1]).toMatch(/^[0-9a-f]$/)
+    expect(segments[2]).toMatch(/^[0-9a-f]{16}-wall\.webp$/)
+  })
+
+  it('derives the shard from the hash, not from the leaf name', () => {
+    // Every file's directory prefix must match the head of its own hash, or a
+    // lookup could compute one path and write another.
+    for (const name of ['a.jpg', 'b.jpg', 'c.jpg', 'IMG_0001.jpg']) {
+      const segments = thumbKey(`/p/${name}`, 1, 2, 'wall').split('/')
+      const hash = segments[2].replace(/-wall\.webp$/, '')
+      expect(segments.slice(0, THUMB_SHARD_DEPTH).join('')).toBe(hash.slice(0, THUMB_SHARD_DEPTH))
+    }
+  })
+
+  it('spreads many photos across the shard space', () => {
+    // The point of sharding: thousands of files must not land in one directory.
+    const keys = Array.from({ length: 2000 }, (_, i) => thumbKey(`/p/${i}.jpg`, 1, 2, 'wall'))
+    const leaves = new Set(keys.map((key) => key.split('/').slice(0, 2).join('/')))
+    // 16*16 = 256 possible leaves; a decent hash fills most of them.
+    expect(leaves.size).toBeGreaterThan(200)
+  })
+
+  it('keeps the change-detection behaviour through the shard', () => {
+    // A touched file must move to a different key *and* may land in a different
+    // directory, which is fine: lookups always recompute from the metadata.
+    const base = thumbKey('/p/a.jpg', 1000, 500, 'wall')
+    const touched = thumbKey('/p/a.jpg', 2000, 500, 'wall')
+    expect(base).not.toBe(touched)
   })
 })

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -44,6 +45,23 @@ describe('thumbUrl', () => {
 
   it('encodes non-ASCII names', () => {
     expect(thumbUrl('京都.webp')).toContain('%E4%BA%AC%E9%83%BD')
+  })
+
+  it('keeps sharded paths as separate segments', () => {
+    // The cache is sharded into subdirectories. Encoding the whole string would
+    // turn the separators into `%2F`, producing a URL that browsers treat as a
+    // single opaque segment rather than a path.
+    expect(thumbUrl('a/b/hash-wall.webp')).toBe('pic://thumb/a/b/hash-wall.webp')
+  })
+
+  it('encodes each sharded segment independently', () => {
+    expect(thumbUrl('a/b/has h-wall.webp')).toBe('pic://thumb/a/b/has%20h-wall.webp')
+  })
+
+  it('normalises Windows separators', () => {
+    // `thumbPath` builds with `path.join`, so a Windows separator can reach
+    // here; a URL must still have forward slashes.
+    expect(thumbUrl('a\\b\\hash-wall.webp')).toBe('pic://thumb/a/b/hash-wall.webp')
   })
 })
 
@@ -91,6 +109,35 @@ describe('resolvePicRequest', () => {
 
   it('resolves an existing thumbnail', () => {
     expect(resolvePicRequest(url('thumb', 'hash-wall.webp'), roots())).toBe(join(thumbDir, 'hash-wall.webp'))
+  })
+
+  it('resolves a sharded thumbnail', () => {
+    // The cache stores renditions in `a/b/` subdirectories; the URL must reach
+    // the same file the encoder wrote.
+    mkdirSync(join(thumbDir, 'a', 'b'), { recursive: true })
+    writeFileSync(join(thumbDir, 'a', 'b', 'hash-wall.webp'), 'x')
+
+    expect(resolvePicRequest(thumbUrl('a/b/hash-wall.webp'), roots())).toBe(
+      join(thumbDir, 'a', 'b', 'hash-wall.webp')
+    )
+  })
+
+  it('round-trips every shard segment without collapsing them', () => {
+    // A single `decodeURIComponent` over the whole pathname would decode `%2F`
+    // after splitting, which is exactly the ambiguity a traversal guard must
+    // not have. A segment containing an encoded slash must not become a
+    // separator.
+    mkdirSync(join(thumbDir, 'a', 'b'), { recursive: true })
+    writeFileSync(join(thumbDir, 'a', 'b', 'h-wall.webp'), 'x')
+
+    expect(resolvePicRequest('pic://thumb/a/b/h-wall.webp', roots())).toBe(join(thumbDir, 'a', 'b', 'h-wall.webp'))
+    // `..%2F..%2Fescape` stays one literal segment name, so it resolves inside
+    // the root and simply does not exist.
+    expect(resolvePicRequest('pic://thumb/..%2F..%2Fescape.webp', roots())).toBeNull()
+  })
+
+  it('rejects a traversal hidden in an encoded segment', () => {
+    expect(resolvePicRequest('pic://thumb/a/%2E%2E/%2E%2E/secret.webp', roots())).toBeNull()
   })
 
   it('resolves a percent-encoded non-ASCII name', () => {

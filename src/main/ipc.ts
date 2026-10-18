@@ -196,7 +196,9 @@ export class PhotoLibrary {
   async thumbUrlFor(photo: Photo, level: ThumbLevel, priority: ThumbPriority = 'interactive'): Promise<string> {
     if (level === 'full') return photoUrl(relativeTo(this.dir, photo.path))
     const file = await ensureThumbnail(this.thumbCacheDir, toThumbRequest(photo, level), priority)
-    return thumbUrl(basename(file))
+    // Relative, not `basename`: the cache is sharded into `a/b/` subdirectories,
+    // and the `pic://thumb` handler resolves the path against the cache root.
+    return thumbUrl(relativeTo(this.thumbCacheDir, file))
   }
 }
 

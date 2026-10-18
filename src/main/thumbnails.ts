@@ -42,6 +42,14 @@ export interface ThumbRequest {
   level: Exclude<ThumbLevel, 'full'>
 }
 
+/**
+ * Absolute path of a rendition.
+ *
+ * `thumbKey` returns a sharded relative path (`a/b/hash-wall.webp`); `join`
+ * normalises the forward slashes to the platform separator. The directory is
+ * created by `buildThumbnail`, not here, so this stays a pure function that
+ * tests can call repeatedly.
+ */
 export function thumbPath(cacheDir: string, request: ThumbRequest): string {
   return join(cacheDir, thumbKey(request.sourcePath, request.mtimeMs, request.sizeBytes, request.level))
 }

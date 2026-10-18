@@ -1,5 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtemp, rm, stat, readdir, writeFile } from 'node:fs/promises'
+
+/**
+ * Every file under the cache, recursively.
+ *
+ * Renditions live in sharded subdirectories (`a/b/hash-wall.webp`), so a flat
+ * `readdir` of the cache root only sees directories. Tests that count files must
+ * walk the tree, or they would silently assert on an empty list.
+ */
+async function allFiles(dir: string): Promise<string[]> {
+  const entries = await readdir(dir, { withFileTypes: true })
+  const files: string[] = []
+  for (const entry of entries) {
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) files.push(...(await allFiles(full)))
+    else files.push(full)
+  }
+  return files
+}
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import sharp from 'sharp'
@@ -126,7 +144,7 @@ describe('ensureThumbnail', () => {
 
   it('leaves no temporary files after success', async () => {
     await ensureThumbnail(cacheDir, request('wall'))
-    const files = await readdir(cacheDir)
+    const files = await allFiles(cacheDir)
     expect(files.some((name) => name.endsWith('.tmp'))).toBe(false)
   })
 
@@ -142,7 +160,7 @@ describe('ensureThumbnail', () => {
 
     expect(new Set(results).size).toBe(1)
     // Exactly one cached rendition, and no stray temp files.
-    const files = await readdir(cacheDir)
+    const files = await allFiles(cacheDir)
     expect(files.filter((name) => name.endsWith('.webp'))).toHaveLength(1)
     expect(files.some((name) => name.endsWith('.tmp'))).toBe(false)
   })
@@ -166,7 +184,7 @@ describe('ensureThumbnail', () => {
       ensureThumbnail(cacheDir, { sourcePath: broken, mtimeMs: info.mtimeMs, sizeBytes: info.size, level: 'wall' })
     ).rejects.toThrow()
 
-    const files = await readdir(cacheDir)
+    const files = await allFiles(cacheDir)
     expect(files.some((name) => name.endsWith('.tmp'))).toBe(false)
   })
 })
