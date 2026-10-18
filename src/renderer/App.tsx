@@ -251,11 +251,21 @@ function AppView({
       if (event.defaultPrevented) return
       if (wall.openPhoto) return
       if (event.ctrlKey || event.metaKey) return
-      if (!isPanKey(event.key)) return
 
       const target = event.target as HTMLElement | null
       if (target?.closest('input, textarea, select, [contenteditable="true"]')) return
       if (target?.closest('.menu-panel')) return
+
+      // Enter / Space opens the focused photo — the keyboard equivalent of
+      // clicking the tile that Alt+arrows has walked to.
+      if (event.key === 'Enter' || event.key === ' ') {
+        if (!wall.state.selectedId) return
+        event.preventDefault()
+        wall.openSelected()
+        return
+      }
+
+      if (!isPanKey(event.key)) return
 
       if (event.altKey) {
         // Alt+arrow: move the focus to the neighbouring photo, scrolling only

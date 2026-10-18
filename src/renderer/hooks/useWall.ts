@@ -76,6 +76,8 @@ export interface UseWall {
   focus: (id: string | null) => void
   /** Close the viewer but keep the focused photo. */
   closeViewer: () => void
+  /** Open the focused photo in the viewer (keyboard equivalent of a click). */
+  openSelected: () => void
   step: (delta: number) => void
   openPhoto: Photo | null
   fitToView: (viewport: { width: number; height: number }) => void
@@ -532,6 +534,7 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
     select: (id) => dispatch({ type: 'selection/set', id }),
     focus: (id) => dispatch({ type: 'selection/focus', id }),
     closeViewer: () => dispatch({ type: 'viewer/close' }),
+    openSelected: () => dispatch({ type: 'viewer/open' }),
     step: (delta) => dispatch({ type: 'selection/step', delta, order: visiblePhotos.map((photo) => photo.id) }),
     openPhoto,
     fitToView

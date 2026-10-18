@@ -635,9 +635,47 @@ describe('useWall', () => {
     })
   })
 
-  describe('fitToView', () => {
-    it('frames the content inside the viewport', async () => {
+  describe('openSelected', () => {
+    it('opens the focused photo without touching the selection', async () => {
+      // Enter/Space on the wall is the keyboard equivalent of clicking the
+      // tile Alt+arrows walked to, so it must open that exact photo.
       api.openDirectory.mockResolvedValue({
+        dir: '/photos',
+        photos: [photo('a', '2020-01-01', 'a.jpg'), photo('b', '2021-01-01', 'b.jpg')],
+        skipped: 0,
+        durationMs: 1
+      })
+
+      const { result } = renderHook(() => useWall(viewport))
+      await act(async () => {
+        await result.current.chooseFolder()
+      })
+
+      act(() => {
+        result.current.focus('a')
+      })
+      expect(result.current.openPhoto).toBeNull()
+
+      act(() => {
+        result.current.openSelected()
+      })
+
+      expect(result.current.openPhoto?.id).toBe('a')
+    })
+
+    it('does nothing when no photo is focused', () => {
+      const { result } = renderHook(() => useWall(viewport))
+
+      act(() => {
+        result.current.openSelected()
+      })
+
+      expect(result.current.openPhoto).toBeNull()
+    })
+  })
+
+  describe('fitToView', () => {
+    it('frames the content inside the viewport', async () => {      api.openDirectory.mockResolvedValue({
         dir: '/photos',
         photos: Array.from({ length: 4 }, (_, i) => photo(`p${i}`)),
         skipped: 0,
