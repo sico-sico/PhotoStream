@@ -39,6 +39,7 @@ export const zhCN: Catalog = {
   'viewer.next': '下一张',
   'viewer.close': '关闭查看',
   'viewer.reveal': '在文件夹中显示',
+  'viewer.fit': '适应窗口',
   'viewer.noDate': '无拍摄日期',
   'viewer.size': '{width}×{height}',
 

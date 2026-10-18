@@ -191,6 +191,86 @@ export function fitTransform(
   }
 }
 
+/**
+ * Zoom bounds for the single-photo viewer, expressed as a multiplier of the
+ * "fit in the window" scale.
+ *
+ * 1 is the whole photo visible. The upper bound is generous because the useful
+ * ceiling depends on the photo: `viewerMaxZoomFor` narrows it to the point where
+ * one image pixel maps to one screen pixel, beyond which zooming only blurs.
+ */
+export const VIEWER_MIN_ZOOM = 1
+export const VIEWER_MAX_ZOOM = 8
+
+/**
+ * Lowest ceiling the viewer will offer.
+ *
+ * A photo smaller than its displayed size computes a 1:1 ratio below 1, which
+ * would lock the viewer at "fit" with no way to zoom in at all. Offering a
+ * little magnification is still useful for inspecting a small image, even if it
+ * is technically interpolated.
+ */
+export const VIEWER_MIN_CEILING = 2
+
+/**
+ * Highest zoom that still shows real detail.
+ *
+ * Zooming past 1:1 stretches pixels without revealing anything, so the ceiling
+ * is the ratio of source pixels to displayed pixels, capped by
+ * `VIEWER_MAX_ZOOM` and floored by `VIEWER_MIN_CEILING`.
+ *
+ * @param naturalWidth   the photo's pixel width
+ * @param displayedWidth the width the image occupies on screen when fitted
+ * @param devicePixelRatio screen density; a 2x display needs twice the source
+ *   pixels to look like 1:1, so it allows half the magnification
+ */
+export function viewerMaxZoom(naturalWidth: number, displayedWidth: number, devicePixelRatio = 1): number {
+  if (!(naturalWidth > 0) || !(displayedWidth > 0) || !(devicePixelRatio > 0)) return VIEWER_MAX_ZOOM
+  const oneToOne = naturalWidth / (displayedWidth * devicePixelRatio)
+  return clamp(oneToOne, VIEWER_MIN_CEILING, VIEWER_MAX_ZOOM)
+}
+
+/**
+ * Keep a panned/zoomed photo reachable.
+ *
+ * Without this, dragging far enough leaves the photo entirely off-screen with no
+ * way back. Each axis is clamped so at least a quarter of the viewport's worth
+ * of image stays inside; when the photo is smaller than the viewport on that
+ * axis (zoomed out), it is centred instead.
+ *
+ * @param fitScale scale at which the photo exactly fills the viewport
+ */
+export function clampViewerTransform(
+  t: Transform,
+  viewportWidth: number,
+  viewportHeight: number,
+  fitScale: number
+): Transform {
+  if (!(fitScale > 0) || viewportWidth <= 0 || viewportHeight <= 0) return t
+
+  const min = fitScale * VIEWER_MIN_ZOOM
+  const max = fitScale * VIEWER_MAX_ZOOM
+  const scale = clampScale(t.scale, min, max)
+
+  // The photo's size at this scale, given that at `fitScale` it exactly fits.
+  const width = (viewportWidth * scale) / fitScale
+  const height = (viewportHeight * scale) / fitScale
+
+  const axis = (value: number, viewport: number, size: number): number => {
+    if (size <= viewport) {
+      // Smaller than the viewport: pin to the centre. Panning it around would
+      // only create empty space.
+      return (viewport - size) / 2
+    }
+    // Larger than the viewport: keep the edges outside it, so no blank gap can
+    // appear on either side. This is the same rule as any image viewer: you can
+    // pan to the corners, never past them.
+    return Math.min(Math.max(value, viewport - size), 0)
+  }
+
+  return { scale, x: axis(t.x, viewportWidth, width), y: axis(t.y, viewportHeight, height) }
+}
+
 /** Visible world rectangle for a viewport, used for culling and LOD decisions. */
 export function visibleWorldRect(
   t: Transform,

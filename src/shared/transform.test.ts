@@ -4,7 +4,10 @@ import {
   MAX_SCALE,
   MIN_FIT_SCALE,
   MIN_SCALE,
+  VIEWER_MAX_ZOOM,
+  VIEWER_MIN_ZOOM,
   clampScale,
+  clampViewerTransform,
   fitTransform,
   fitWallTransform,
   panBy,
@@ -211,6 +214,57 @@ describe('fitWallTransform', () => {
       const right = t.x + 1600 * t.scale
       expect(t.x).toBeGreaterThanOrEqual(0)
       expect(right).toBeGreaterThan(0)    }
+  })
+})
+
+describe('clampViewerTransform', () => {
+  const viewport = { w: 1000, h: 800 }
+
+  it('leaves a fitted photo untouched', () => {
+    const t = { scale: 1, x: 0, y: 0 }
+    expect(clampViewerTransform(t, viewport.w, viewport.h, 1)).toEqual(t)
+  })
+
+  it('bounds the zoom to the fit scale and the maximum factor', () => {
+    expect(clampViewerTransform({ scale: 0.2, x: 0, y: 0 }, viewport.w, viewport.h, 1).scale).toBe(VIEWER_MIN_ZOOM)
+    expect(clampViewerTransform({ scale: 999, x: 0, y: 0 }, viewport.w, viewport.h, 1).scale).toBe(VIEWER_MAX_ZOOM)
+  })
+
+  it('never shrinks below the fit scale', () => {
+    // "Fit" is the zoomed-out limit: the whole photo is already visible.
+    const t = clampViewerTransform({ scale: 0.4, x: 0, y: 0 }, viewport.w, viewport.h, 2)
+    expect(t.scale).toBe(VIEWER_MIN_ZOOM * 2)
+  })
+
+  it('centres horizontally when the photo is narrower than the stage', () => {
+    // fitScale 2 means the untransformed photo fills the stage, so at scale 2
+    // it is exactly the stage size and there is no slack to pan.
+    const t = clampViewerTransform({ scale: 2, x: 400, y: 0 }, viewport.w, viewport.h, 2)
+    expect(t.x).toBe(0)
+  })
+
+  it('keeps part of a zoomed photo on screen when panned far right', () => {
+    // Dragging right by 5000px would otherwise push the photo completely out.
+    const t = clampViewerTransform({ scale: 2, x: 5000, y: 0 }, viewport.w, viewport.h, 1)
+    expect(t.x).toBeLessThanOrEqual(viewport.w * 0.75)
+  })
+
+  it('keeps part of a zoomed photo on screen when panned far left', () => {
+    const t = clampViewerTransform({ scale: 2, x: -5000, y: 0 }, viewport.w, viewport.h, 1)
+    // The photo is 2000px wide; at least a quarter of the viewport must overlap.
+    expect(t.x).toBeGreaterThanOrEqual(viewport.w - 2000 - viewport.w * 0.75)
+  })
+
+  it('clamps both axes independently', () => {
+    const t = clampViewerTransform({ scale: 2, x: 5000, y: -5000 }, viewport.w, viewport.h, 1)
+    expect(t.x).toBeLessThanOrEqual(viewport.w)
+    expect(t.y).toBeGreaterThanOrEqual(-viewport.h * 2)
+  })
+
+  it('returns the input for a degenerate stage', () => {
+    const t = { scale: 2, x: 10, y: 10 }
+    expect(clampViewerTransform(t, 0, 0, 1)).toBe(t)
+    expect(clampViewerTransform(t, 100, 100, 0)).toBe(t)
   })
 })
 

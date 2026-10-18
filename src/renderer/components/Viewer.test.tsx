@@ -91,17 +91,26 @@ describe('Viewer', () => {
     expect(onClose).not.toHaveBeenCalled()
   })
 
-  it('closes when the backdrop is clicked but not the image', async () => {
+  it('closes on a click anywhere in the stage', async () => {
     const user = userEvent.setup()
     const onClose = vi.fn()
     renderViewer({ onClose })
 
-    const full = document.querySelector('img:not(.preview)') as HTMLImageElement
-    await user.click(full)
-    expect(onClose).not.toHaveBeenCalled()
-
-    await user.click(screen.getByTestId('viewer').querySelector('.viewer-stage') as HTMLElement)
+    await user.click(screen.getByTestId('viewer-stage'))
     expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not close when the gesture was a drag', async () => {
+    // Panning a zoomed photo must never be mistaken for "click to dismiss".
+    const onClose = vi.fn()
+    renderViewer({ onClose })
+
+    const stage = screen.getByTestId('viewer-stage')
+    stage.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0, clientX: 100, clientY: 100 }))
+    stage.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, clientX: 240, clientY: 220 }))
+    stage.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: 240, clientY: 220 }))
+
+    expect(onClose).not.toHaveBeenCalled()
   })
 
   it('wires the toolbar buttons', async () => {

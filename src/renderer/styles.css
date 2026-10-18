@@ -383,6 +383,19 @@ body {
   place-items: center;
   padding: 24px 24px 0;
   cursor: zoom-out;
+  /* No text selection or native image drag while panning. */
+  user-select: none;
+  touch-action: none;
+}
+
+/* Once zoomed the stage pans instead of acting as a close button. */
+.viewer-stage.zoomed {
+  cursor: grab;
+  overflow: hidden;
+}
+
+.viewer-stage.zoomed.dragging {
+  cursor: grabbing;
 }
 
 .viewer-image {
@@ -392,6 +405,8 @@ body {
   object-fit: contain;
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
   cursor: default;
+  /* Transforms are applied inline when zoomed; keep them off the layout pass. */
+  will-change: transform;
 }
 
 /* The thumbnail is a stand-in that fades out as the original appears. */

@@ -39,6 +39,7 @@ export const fr: Catalog = {
   'viewer.next': 'Photo suivante',
   'viewer.close': 'Fermer la visionneuse',
   'viewer.reveal': 'Afficher dans le dossier',
+  'viewer.fit': 'Ajuster',
   'viewer.noDate': 'aucune date de prise de vue',
   'viewer.size': '{width}×{height}',
 

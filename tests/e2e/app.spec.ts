@@ -211,6 +211,44 @@ test('opens a photo in the viewer and navigates with the keyboard', async () => 
   await expect(viewer).toBeHidden()
 })
 
+test('zooms and pans inside the viewer', async () => {
+  await useEnglish()
+  await page.locator('[data-photo-id]').first().click()
+  const viewer = page.getByRole('dialog')
+  await expect(viewer).toBeVisible()
+
+  const stage = page.getByTestId('viewer-stage')
+  const image = stage.locator('img.viewer-image:not(.preview)')
+  await expect.poll(async () => image.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0)
+
+  const transformOf = () => image.evaluate((img: HTMLElement) => img.style.transform)
+  expect(await transformOf()).toBe('')
+
+  // Wheel in: the image must actually scale up.
+  const box = (await stage.boundingBox())!
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.wheel(0, -400)
+  await expect.poll(transformOf).toContain('scale(')
+
+  // Drag: the image must move, and the viewer must NOT close (a pan is not a
+  // click-to-dismiss).
+  const before = await image.evaluate((img: HTMLElement) => img.style.transform)
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width / 2 - 120, box.y + box.height / 2 - 80, { steps: 8 })
+  await page.mouse.up()
+
+  expect(await image.evaluate((img: HTMLElement) => img.style.transform)).not.toBe(before)
+  await expect(viewer).toBeVisible()
+
+  // Fit restores the whole photo.
+  await page.getByRole('button', { name: 'Fit' }).click()
+  expect(await transformOf()).toBe('')
+
+  await page.keyboard.press('Escape')
+  await expect(viewer).toBeHidden()
+})
+
 test('does not open the viewer when the wall was dragged', async () => {
   await useEnglish()
   await page.mouse.move(600, 400)

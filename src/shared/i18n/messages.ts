@@ -48,6 +48,7 @@ export const en = {
   'viewer.next': 'Next photo',
   'viewer.close': 'Close viewer',
   'viewer.reveal': 'Show in folder',
+  'viewer.fit': 'Fit',
   'viewer.noDate': 'no capture date',
   'viewer.size': '{width}×{height}',
 
