@@ -67,14 +67,32 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
 
   const visiblePhotos = useMemo(() => applyFilters(state.photos, state.filters), [state.photos, state.filters])
 
-  // The wall always spans the viewport width so rows break at the window edge.
+  /**
+   * Width the wall is laid out for, in world units.
+   *
+   * Normally the viewport width, so rows break at the window edge. When zoomed
+   * out, the same window covers *more* world width than the window itself: the
+   * wall would then be narrower than the visible area and empty bands would
+   * appear at both sides. Widening the layout by `1/scale` makes the columns
+   * fill the window at any zoom, which is what a photo wall should do.
+   *
+   * Zooming in is deliberately excluded: it would reflow the whole library while
+   * the user is inspecting one photo, and at that point there is nothing to fill.
+   */
+  const layoutWidth = useMemo(() => {
+    const base = Math.max(320, viewport.width)
+    if (!(transform.scale < 1)) return base
+    return Math.round(base / transform.scale)
+  }, [transform.scale, viewport.width])
+
+  // The wall spans the width it is laid out for, so rows break at the window edge.
   const layout = useMemo(
     () =>
       computeLayout(visiblePhotos, {
         mode: state.layout,
-        containerWidth: Math.max(320, viewport.width)
+        containerWidth: layoutWidth
       }),
-    [visiblePhotos, state.layout, viewport.width]
+    [visiblePhotos, state.layout, layoutWidth]
   )
 
   const thumbLevel = useMemo(

@@ -10,6 +10,7 @@ import { watchDirectory, type DirectoryWatcher, type RawWatchEvent } from './wat
 import { thumbUrl, photoUrl } from './protocol'
 import { findPhoto, removePhoto, sortPhotos, upsertPhoto } from '../shared/photoStore'
 import { readImageMetadata } from './metadata'
+import type { MetadataCache } from './metadata-cache'
 import { locales } from '../shared/i18n'
 
 /**
@@ -24,7 +25,9 @@ export class PhotoLibrary {
 
   constructor(
     readonly thumbCacheDir: string,
-    private readonly notify: (channel: string, payload: unknown) => void
+    private readonly notify: (channel: string, payload: unknown) => void,
+    /** Cache of parsed EXIF, keyed by path + mtime + size. */
+    private readonly metadataCache?: MetadataCache
   ) {}
 
   get directory(): string {
@@ -38,7 +41,7 @@ export class PhotoLibrary {
   /** Open a directory: scan it, start watching, and warm thumbnails in the background. */
   async open(dir: string): Promise<{ dir: string; photos: Photo[]; skipped: number; durationMs: number }> {
     this.close()
-    const result = await scanDirectory(dir)
+    const result = await scanDirectory(dir, { cache: this.metadataCache })
     this.photos = result.photos
     this.dir = result.dir
     this.watcher = this.startWatching(result.dir)

@@ -361,6 +361,24 @@ body {
   will-change: transform;
 }
 
+/*
+ * Animated moves.
+ *
+ * Applied only for keyboard steps and auto-scroll. Dragging and wheel zoom must
+ * stay instant: a transition there would trail the pointer and feel laggy
+ * rather than smooth. The curve is a decelerating ease so a one-tile step
+ * arrives quickly and settles, matching how a scroll container behaves.
+ */
+.world.settling {
+  transition: transform 0.22s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .world.settling {
+    transition: none;
+  }
+}
+
 .tile {
   position: absolute;
   top: 0;
@@ -368,8 +386,47 @@ body {
   overflow: hidden;
   border-radius: 4px;
   background: #1c1c23;
-  contain: layout paint style;
+  /*
+   * No `paint` containment: it clips the tile to its own box, which would cut
+   * the hover lift off at the edges. `layout`/`style` still buy the isolation
+   * that mattered for the 3000-tile pan, and `overflow: hidden` keeps the photo
+   * itself inside the rounded corners.
+   */
+  contain: layout style;
   user-select: none;
+  /*
+   * Hover lift.
+   *
+   * The scale is small on purpose: at the default zoom tiles sit ~200px wide, so
+   * 4% is an 8px grow — enough to feel responsive without overlapping the
+   * neighbours' captions. `transform-origin` stays centred so the photo grows
+   * evenly rather than drifting toward a corner.
+   *
+   * The position comes in as custom properties (`--tile-x`/`--tile-y`) because an
+   * inline `transform` would override this rule entirely; composing both here is
+   * what lets the lift coexist with the layout offset.
+   */
+  transform: translate3d(var(--tile-x, 0), var(--tile-y, 0), 0) scale(1);
+  transition: transform 0.16s cubic-bezier(0.22, 0.61, 0.36, 1), box-shadow 0.16s ease;
+}
+
+.tile:hover {
+  transform: translate3d(var(--tile-x, 0), var(--tile-y, 0), 0) scale(1.04);
+  z-index: 2;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+}
+
+/* A selected tile keeps its outline legible over the lift. */
+.tile.selected:hover {
+  transform: translate3d(var(--tile-x, 0), var(--tile-y, 0), 0) scale(1.02);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tile,
+  .tile:hover {
+    transition: none;
+    transform: none;
+  }
 }
 
 .tile img {

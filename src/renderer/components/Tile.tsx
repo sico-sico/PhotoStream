@@ -26,11 +26,21 @@ export const Tile = memo(function Tile({ photo, item, url, selected, square }: T
     <div
       className={`tile ${selected ? 'selected' : ''}`}
       data-photo-id={photo.id}
-      style={{
-        transform: `translate3d(${item.x}px, ${item.y}px, 0)`,
-        width: `${item.w}px`,
-        height: `${item.h}px`
-      }}
+      style={
+        {
+          /*
+           * Position goes through custom properties, not through `transform`
+           * directly. An inline `transform` would beat the `.tile:hover` rule in
+           * the stylesheet (inline wins over class selectors), which silently
+           * disabled the hover lift. The stylesheet now composes position and
+           * scale itself, so both can coexist.
+           */
+          '--tile-x': `${item.x}px`,
+          '--tile-y': `${item.y}px`,
+          width: `${item.w}px`,
+          height: `${item.h}px`
+        } as React.CSSProperties
+      }
     >
       {url ? (
         <img

@@ -17,6 +17,14 @@ export interface WallProps {
   square: boolean
   selectedId: string | null
   handlers: PanZoomHandlers
+  /**
+   * Animate the next transform change.
+   *
+   * Keyboard steps and auto-scroll jump by a whole tile, which reads as a teleport
+   * without a transition. Dragging must never animate — it would lag the cursor —
+   * so this is passed in per move rather than baked into the CSS.
+   */
+  animate?: boolean
 }
 
 /** Imperative handle so a drag can move the wall without a React render. */
@@ -32,6 +40,11 @@ export interface WallHandle {
   applyTransform: (transform: Transform) => void
 }
 
+/** Shared by the style attribute and the imperative path, so they cannot drift. */
+function worldTransform(t: Transform): string {
+  return `translate3d(${t.x}px, ${t.y}px, 0) scale(${t.scale})`
+}
+
 /**
  * The wall: one transform container plus the tiles near the viewport.
  *
@@ -42,7 +55,7 @@ export interface WallHandle {
  */
 export const Wall = memo(
   forwardRef<WallHandle, WallProps>(function Wall(
-    { layout, photos, thumbUrls, transform, viewport, square, selectedId, handlers },
+    { layout, photos, thumbUrls, transform, viewport, square, selectedId, handlers, animate = false },
     ref
   ): React.JSX.Element {
     const { t } = useI18n()
@@ -54,7 +67,7 @@ export const Wall = memo(
         applyTransform(next: Transform) {
           const world = worldRef.current
           if (!world) return
-          world.style.transform = `translate3d(${next.x}px, ${next.y}px, 0) scale(${next.scale})`
+          world.style.transform = worldTransform(next)
         }
       }),
       []
@@ -73,13 +86,13 @@ export const Wall = memo(
     return (
       <div className="stage" data-testid="stage" role="application" aria-label={t('wall.aria')} {...handlers}>
         <div
-          className="world"
+          className={`world ${animate ? 'settling' : ''}`}
           data-testid="world"
           ref={worldRef}
           style={{
             width: `${layout.width}px`,
             height: `${layout.height}px`,
-            transform: `translate3d(${transform.x}px, ${transform.y}px, 0) scale(${transform.scale})`
+            transform: worldTransform(transform)
           }}
         >
           {visible.items.map((item) => {

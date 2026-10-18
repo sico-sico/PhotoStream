@@ -185,6 +185,7 @@ locales.register({ id: 'de', label: 'Deutsch', catalog: de })
 | 文件 | 内容 |
 |------|------|
 | `settings.json` | 布局、排序、筛选、上次文件夹、语言 |
+| `metadata.db` | 已解析的 EXIF 元数据缓存（SQLite，可安全删除） |
 | `thumbs/` | 缩略图缓存（可安全删除，会重新生成） |
 
 删除整个 `PhotoStreamData/` 即可恢复初始状态。

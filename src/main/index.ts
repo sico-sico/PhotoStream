@@ -4,6 +4,7 @@ import { IPC } from '../shared/ipc'
 import { PhotoLibrary, registerIpc } from './ipc'
 import { handlePicProtocol, registerPicScheme } from './protocol'
 import { currentDataDir, resolveThumbCacheDir } from './paths'
+import { MetadataCache } from './metadata-cache'
 import { mkdir } from 'node:fs/promises'
 
 // Must run before `app.ready`: privileged schemes cannot be registered later.
@@ -83,7 +84,11 @@ app.whenReady().then(async () => {
   await mkdir(thumbCacheDir, { recursive: true })
 
   let photoDir = ''
-  library = new PhotoLibrary(thumbCacheDir, broadcast)
+  // One database for the whole session: EXIF parsing is the dominant cost of
+  // opening a folder (measured at 1178 ms of 1296 ms for 3226 photos), and the
+  // cache turns a repeat visit into a handful of indexed lookups.
+  const metadataCache = new MetadataCache(join(dataDir, 'metadata.db'))
+  library = new PhotoLibrary(thumbCacheDir, broadcast, metadataCache)
 
   // Only the open library and the thumbnail cache may be served over pic://.
   handlePicProtocol(() => ({

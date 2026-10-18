@@ -157,11 +157,18 @@ describe('Wall', () => {
     })
   })
 
-  it('positions each tile with its own translate, never left/top', () => {
+  it('positions each tile through custom properties, never left/top', () => {
+    // The offset travels as `--tile-x`/`--tile-y` rather than as an inline
+    // `transform`: an inline transform wins over the stylesheet's `.tile:hover`
+    // rule, which silently disabled the hover lift. The stylesheet composes
+    // position and scale, so both can apply.
     renderWall()
     const tiles = document.querySelectorAll<HTMLElement>('[data-photo-id]')
-    expect(tiles[0].style.transform).toBe('translate3d(0px, 0px, 0)')
-    expect(tiles[1].style.transform).toBe('translate3d(110px, 0px, 0)')
+    expect(tiles[0].style.getPropertyValue('--tile-x')).toBe('0px')
+    expect(tiles[0].style.getPropertyValue('--tile-y')).toBe('0px')
+    expect(tiles[1].style.getPropertyValue('--tile-x')).toBe('110px')
+    // No inline transform, or the hover rule would be dead again.
+    expect(tiles[0].style.transform).toBe('')
     expect(tiles[0].style.left).toBe('')
   })
 

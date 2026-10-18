@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FilterPanel } from './components/FilterPanel'
 import { Toolbar } from './components/Toolbar'
 import { Viewer } from './components/Viewer'
@@ -9,6 +9,7 @@ import { useWall } from './hooks/useWall'
 import { I18nProvider } from './i18n/I18nProvider'
 import { useI18n } from './i18n/context'
 import { fitWallTransform } from '@shared/transform'
+import type { Transform } from '@shared/transform'
 import { centerOn, isComfortablyVisible, isPanKey, neighbourInDirection, panByKey } from '@shared/keyboard'
 import type { AppInfo } from '@shared/types'
 
@@ -79,11 +80,37 @@ function AppView({
   const transformRef = useRef(wall.transform)
   transformRef.current = wall.transform
 
+  /**
+   * Whether the next transform change should be animated.
+   *
+   * Only programmatic moves animate. A drag or a wheel zoom that eased would
+   * lag the pointer, which feels broken rather than smooth, so those paths turn
+   * it off before touching the transform.
+   */
+  const [animate, setAnimate] = useState(false)
+  const animateTimer = useRef<number | null>(null)
+  const moveWithAnimation = useCallback((next: Transform) => {
+    setAnimate(true)
+    wall.setTransform(next)
+    // Reset after the transition would have finished, so a later drag starts
+    // from a still wall.
+    if (animateTimer.current !== null) window.clearTimeout(animateTimer.current)
+    animateTimer.current = window.setTimeout(() => setAnimate(false), 260)
+  }, [wall])
+
+  useEffect(() => () => {
+    if (animateTimer.current !== null) window.clearTimeout(animateTimer.current)
+  }, [])
+
   const handlers = usePanZoom(wall.setTransform, {
     onItemClick: (id) => wall.select(id),
     onBackgroundClick: () => setFiltersOpen(false),
     // Per-frame pan goes straight to the DOM; state is committed on release.
-    onLiveTransform: (next) => wallRef.current?.applyTransform(next),
+    onLiveTransform: (next) => {
+      // Following the cursor exactly: no easing allowed mid-drag.
+      setAnimate(false)
+      wallRef.current?.applyTransform(next)
+    },
     getTransform: () => transformRef.current
   })
   // Frame the wall the first time it has content, and again when the folder
@@ -139,7 +166,7 @@ function AppView({
             const next = layoutByItem.get(nextId)
             const centre = next ? { x: next.x + next.w / 2, y: next.y + next.h / 2 } : null
             if (centre && !isComfortablyVisible(wall.transform, centre, viewport)) {
-              wall.setTransform(centerOn(wall.transform, centre, viewport))
+              moveWithAnimation(centerOn(wall.transform, centre, viewport))
             }
             return
           }
@@ -148,12 +175,12 @@ function AppView({
 
       // Nothing selected, or no neighbour in that direction: pan the canvas.
       event.preventDefault()
-      wall.setTransform(panByKey(wall.transform, event.key, viewport, event.shiftKey))
+      moveWithAnimation(panByKey(wall.transform, event.key, viewport, event.shiftKey))
     }
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [viewport, wall])
+  }, [moveWithAnimation, viewport, wall])
 
   return (
     <div className="app" ref={viewport.ref}>
@@ -208,6 +235,7 @@ function AppView({
           square={wall.state.layout === 'square'}
           selectedId={wall.state.selectedId}
           handlers={handlers}
+          animate={animate}
         />
       )}
 
