@@ -2,18 +2,26 @@ import { forwardRef, memo, useImperativeHandle, useMemo, useRef } from 'react'
 import type { LayoutResult } from '@shared/layout'
 import type { Transform } from '@shared/transform'
 import type { Photo } from '@shared/types'
-import { cullItems } from '@shared/cull'
+import type { CullResult } from '@shared/cull'
 import type { PanZoomHandlers } from '../hooks/usePanZoom'
 import { useI18n } from '../i18n/context'
 import { Tile } from './Tile'
 
 export interface WallProps {
   layout: LayoutResult
+  /** Every photo in the library, keyed by id below. */
   photos: readonly Photo[]
+  /**
+   * The tiles to mount.
+   *
+   * Passed in rather than computed here: the same set decides which thumbnails
+   * are requested, and two independent computations drifted apart — one used a
+   * different margin and a different truncation rule, which left mounted tiles
+   * with no image at all when zoomed out.
+   */
+  mounted: CullResult
   thumbUrls: Record<string, string>
   transform: Transform
-  /** Viewport size in CSS pixels, used to decide which tiles to mount. */
-  viewport: { width: number; height: number }
   square: boolean
   selectedId: string | null
   handlers: PanZoomHandlers
@@ -55,7 +63,7 @@ function worldTransform(t: Transform): string {
  */
 export const Wall = memo(
   forwardRef<WallHandle, WallProps>(function Wall(
-    { layout, photos, thumbUrls, transform, viewport, square, selectedId, handlers, animate = false },
+    { layout, photos, mounted, thumbUrls, transform, square, selectedId, handlers, animate = false },
     ref
   ): React.JSX.Element {
     const { t } = useI18n()
@@ -75,13 +83,9 @@ export const Wall = memo(
 
     const byId = useMemo(() => new Map(photos.map((photo) => [photo.id, photo])), [photos])
 
-    // Only tiles near the viewport are mounted. `transform` participates because
-    // panning changes what is visible, but during a drag it is only pushed on
-    // release, so this does not run per frame.
-    const visible = useMemo(
-      () => cullItems(layout, transform, viewport.width, viewport.height),
-      [layout, transform, viewport.height, viewport.width]
-    )
+    // Only tiles near the viewport are mounted; the set comes from `useWall` so
+    // the thumbnail requests use exactly the same one.
+    const visible = mounted
 
     return (
       <div className="stage" data-testid="stage" role="application" aria-label={t('wall.aria')} {...handlers}>

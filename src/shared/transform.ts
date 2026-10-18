@@ -38,20 +38,17 @@ export const IDENTITY: Transform = { scale: 1, x: 0, y: 0 }
  * is computed for `viewportWidth / scale` world pixels, which keeps the *width*
  * covered at any zoom. Height is not compensated for — it follows from how many
  * rows the photos make, and a wider layout means fewer rows. Past a point the
- * scaled wall is shorter than the window, `clampWallTransform` centres it, and
- * the result is a thin horizontal band floating in empty space. Measured on the
- * 3226-photo library: at scale 0.05 the wall is 1600x329 inside a 1600x956
- * window, which is the "layout looks broken when zoomed right out" report.
+ * scaled wall is shorter than the window, `clampWallTransform` centres it, and the
+ * result is a thin band floating in empty space. Measured on the 3226-photo
+ * library: at scale 0.05 the wall is 1600x329 inside a 1600x956 window.
  *
- * No layout can avoid this below a certain scale, because the wall's total area
- * is fixed: scaling by `s` covers `area * s²` screen pixels, so covering the
- * window requires `s >= sqrt(windowArea / wallArea)`. That bound is what this
- * returns — the content-preserving floor on zoom-out.
+ * No layout can avoid this below a certain scale, because the wall's area is
+ * fixed: scaling by `s` covers `area * s²` screen pixels, so covering the window
+ * needs `s >= sqrt(windowArea / wallArea)`.
  *
- * Never exceeds `MIN_FIT_SCALE`-style limits: it is a floor for the *content*,
- * applied on top of `MIN_SCALE`. A library with few photos returns that same
- * `MIN_SCALE` cap, since a small wall can still be spread over the window by the
- * width compensation.
+ * This is only the *area* bound. The renderer also caps how many tiles it mounts,
+ * which is a separate limit that depends on the actual layout; see
+ * `minScaleForTiles`.
  */
 export function minScaleForWall(
   worldWidth: number,
@@ -63,10 +60,47 @@ export function minScaleForWall(
   if (!(worldWidth > 0) || !(worldHeight > 0)) return floor
   if (!(viewportWidth > 0) || !(viewportHeight > 0)) return floor
   const needed = Math.sqrt((viewportWidth * viewportHeight) / (worldWidth * worldHeight))
-  // Also capped at 1: a wall smaller than the window needs no zoom-out floor at
-  // all, and returning >1 would forbid the user from zooming out even slightly
-  // (and would break `fitToView`, which legitimately scales below 1).
+  // Capped at 1: a wall smaller than the window needs no zoom-out floor at all,
+  // and a value above 1 would forbid zooming out (and break `fitToView`, which
+  // legitimately scales below 1).
   return Math.min(1, Math.max(floor, needed))
+}
+
+/**
+ * The smallest zoom at which every photo on screen still fits under the mount cap.
+ *
+ * The renderer keeps at most `maxTiles` tiles live and drops the rest, so zooming
+ * out past the point where more tiles fit on screen makes photos disappear.
+ * Measured on the 3226-photo library: 648 tiles intersected the viewport at scale
+ * 0.18 and 2250 at 0.0965, against a cap of 600 — two thirds of the visible
+ * photos were never rendered.
+ *
+ * Solved by bisection against the real layout rather than by a formula: the
+ * visible count is not a smooth function of the scale, because the layout
+ * re-flows into whole columns and rows. Eight steps resolve the range to well
+ * under one percent.
+ *
+ * @param visibleAt count of tiles the cull would mount at a given scale
+ */
+export function minScaleForTiles(
+  visibleAt: (scale: number) => number,
+  maxTiles: number,
+  floor = MIN_SCALE
+): number {
+  if (!(maxTiles > 0)) return floor
+  // `floor` is the most zoomed-out this can ever be, so test it first: if even
+  // that is within the cap there is nothing to raise.
+  if (visibleAt(floor) <= maxTiles) return floor
+  if (visibleAt(1) > maxTiles) return 1
+
+  let low = floor
+  let high = 1
+  for (let i = 0; i < 8; i += 1) {
+    const mid = (low + high) / 2
+    if (visibleAt(mid) <= maxTiles) high = mid
+    else low = mid
+  }
+  return high
 }
 
 export function clamp(value: number, min: number, max: number): number {

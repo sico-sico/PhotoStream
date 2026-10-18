@@ -1,24 +1,33 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
+﻿import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import type { Filters, LayoutMode, Photo, Settings, SortMode, ThumbLevel } from '@shared/types'
 import { DEFAULT_SETTINGS, DEFAULT_SORT } from '@shared/types'
 import { applyFilters } from '@shared/filters'
 import { computeLayout } from '@shared/layout'
 import { pickThumbLevel, REFERENCE_TILE } from '@shared/thumbs'
-import { clampWallTransform, fitWallTransform, minScaleForWall, type Transform } from '@shared/transform'
+import { clampWallTransform, fitWallTransform, minScaleForTiles, minScaleForWall, type Transform } from '@shared/transform'
+import { MAX_MOUNTED_TILES } from '@shared/cull'
 import { reanchorTransform } from '@shared/reanchor'
-import { prefetchIdsForScroll } from '@shared/cull'
+import { CULL_MARGIN, cullItems, prefetchIdsForScroll, type CullResult } from '@shared/cull'
 import { INITIAL_STATE, reducer } from '../state/wallReducer'
 
 /**
  * How many destination tiles to prefetch for a scrollbar jump.
  *
  * Deliberately about one screenful, not the whole padded band. The main process
- * encodes four at a time, so a bigger batch does not arrive sooner — it just
+ * encodes four at a time, so a bigger batch does not arrive sooner 鈥?it just
  * pushes the tiles that are already visible further back in the queue. Measured
  * on 3226 photos: a 400-tile prefetch left 14 of 81 visible tiles empty 15 s
  * after the jump.
  */
 const PREFETCH_BATCH = 80
+
+/**
+ * How many visible tiles to request per pass.
+ *
+ * Sized above the mount cap so one pass can cover everything on screen; the
+ * main process dedupes and queues them, so asking for more than fits is cheap.
+ */
+const REQUEST_BATCH = 800
 
 /**
  * Delay before a prefetch starts.
@@ -47,6 +56,11 @@ export interface UseWall {
   state: typeof INITIAL_STATE
   visiblePhotos: Photo[]
   layout: ReturnType<typeof computeLayout>
+  /**
+   * Tiles the wall will mount, produced by one cull for both rendering and
+   * thumbnail requests so the two cannot disagree.
+   */
+  mounted: CullResult
   thumbLevel: ThumbLevel
   thumbUrls: Record<string, string>
   transform: Transform
@@ -103,7 +117,7 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
    * because the right rendition depends on the current zoom and that changes in
    * both directions. The previous version recorded only the highest level ever
    * received and refused to downgrade, so after one zoom-in a tile kept
-   * displaying a multi-megapixel original even when zoomed back out — measured
+   * displaying a multi-megapixel original even when zoomed back out 鈥?measured
    * at 1239 MB in the renderer and 790 MB of GPU memory after a single
    * in-and-out gesture, versus 142 MB at rest.
    */
@@ -130,7 +144,7 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
    * `loadSettings` is async, so a drop that lands in the first moments after
    * launch is processed *before* the restore gets to reopen `lastDir`. Without
    * this flag the restore would then be the newest open and silently replace the
-   * folder the user had just dropped — the "quick drag sometimes does nothing"
+   * folder the user had just dropped 鈥?the "quick drag sometimes does nothing"
    * report.
    */
   const userOpenedRef = useRef(false)
@@ -147,8 +161,8 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
    * The wall laid out for a plain window, with no zoom compensation.
    *
    * Its *area* is what sets the zoom-out floor. Area is essentially invariant
-   * under reflow — the same photos cover the same total space whether they are
-   * laid out wide or narrow — so measuring it here, at a width that does not
+   * under reflow 鈥?the same photos cover the same total space whether they are
+   * laid out wide or narrow 鈥?so measuring it here, at a width that does not
    * depend on the zoom, is what breaks the circular dependency between the
    * scale, the layout width and the floor.
    */
@@ -158,18 +172,38 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
   )
 
   /**
-   * Smallest zoom that can still fill the window with this wall.
+   * Smallest zoom that still shows the wall properly.
    *
-   * Zooming out below it shows the wall as a thin band centred in empty space,
-   * because the wall's total area is fixed: scaling by `s` covers `area * s²`
-   * screen pixels, and once that is smaller than the window no layout can fill
-   * it. Measured on 3226 photos: 0.0826 here, against the 0.05 that produced a
-   * 1600x329 wall in a 1600x956 window.
+   * Two limits, and the stricter one wins:
+   *
+   * - the wall must be able to cover the window at all, which depends on its
+   *   total area (see `minScaleForWall`);
+   * - every tile that fits on screen must fit under the mount cap, or photos
+   *   silently stop being rendered (see `minScaleForTiles`).
+   *
+   * Both are derived from the un-zoomed layout, so neither depends on the
+   * transform they are clamping 鈥?that keeps this out of a feedback loop with
+   * the zoom-compensated `layoutWidth` below.
    */
-  const minScale = useMemo(
-    () => minScaleForWall(baseLayout.width, baseLayout.height, viewport.width, viewport.height),
-    [baseLayout.height, baseLayout.width, viewport.height, viewport.width]
-  )
+  const minScale = useMemo(() => {
+    const areaFloor = minScaleForWall(baseLayout.width, baseLayout.height, viewport.width, viewport.height)
+    // Measured with the *same* margin the wall mounts with. Using zero here
+    // undercounted by roughly a third and let the floor through too low, so the
+    // cap still bit: 600 of 2332 visible tiles were dropped at 0.2271.
+    const visibleAt = (scale: number): number =>
+      cullItems(
+        computeLayout(visiblePhotos, {
+          mode: state.layout,
+          containerWidth: Math.round(Math.max(320, viewport.width) / scale)
+        }),
+        { scale, x: 0, y: 0 },
+        viewport.width,
+        viewport.height,
+        CULL_MARGIN,
+        Number.MAX_SAFE_INTEGER
+      ).items.length
+    return minScaleForTiles(visibleAt, MAX_MOUNTED_TILES, areaFloor)
+  }, [baseLayout.height, baseLayout.width, visiblePhotos, state.layout, viewport.height, viewport.width])
 
   /**
    * Width the wall is laid out for, in world units.
@@ -240,29 +274,26 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
   )
 
   /**
-   * Ids of tiles currently inside the viewport, plus a small margin.
+   * Ids of tiles the wall will actually mount.
    *
-   * Thumbnails are only requested for these. Asking for every photo in the
-   * folder was the reason a large library took minutes to become usable: the
-   * main process encoded thousands of renditions the user never scrolled to.
-   * The margin pre-fetches one screen in each direction so ordinary panning
-   * does not show empty tiles.
+   * This has to be the *same* set the cull produces, not a separately computed
+   * band. The two used to disagree in two ways, and both showed up as blank
+   * tiles:
+   *
+   * - the margin here was `max(viewportWidth, viewportHeight)` while the cull
+   *   uses a flat 900 screen px, so this covered a different region;
+   * - the request list was taken in layout order (the top rows) while the cull
+   *   truncates by distance from the viewport centre. Zoomed out, where the cap
+   *   bites, the two sets barely overlapped and all 600 mounted tiles were blank.
+   *
+   * Deriving both from one `cullItems` call is what makes them agree by
+   * construction.
    */
-  const visibleIds = useMemo(() => {
-    const margin = Math.max(viewport.width, viewport.height)
-    const left = (-transform.x - margin) / transform.scale
-    const top = (-transform.y - margin) / transform.scale
-    const right = (viewport.width - transform.x + margin) / transform.scale
-    const bottom = (viewport.height - transform.y + margin) / transform.scale
-
-    const ids = new Set<string>()
-    for (const item of layout.items) {
-      if (item.x + item.w < left || item.x > right) continue
-      if (item.y + item.h < top || item.y > bottom) continue
-      ids.add(item.id)
-    }
-    return ids
-  }, [layout.items, transform.x, transform.y, transform.scale, viewport.width, viewport.height])
+  const mounted = useMemo(
+    () => cullItems(layout, transform, viewport.width, viewport.height),
+    [layout, transform, viewport.height, viewport.width]
+  )
+  const visibleIds = mounted.ids
 
   /**
    * World row the scrollbar is heading for, or `null` when idle.
@@ -304,7 +335,7 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
       dispatch({ type: 'viewer/info', open: settings.viewerInfo === true })
       // Only reopen the remembered folder if the user has not opened one
       // themselves already. `loadSettings` is async, so a folder dragged in
-      // right after launch arrives before this point — and reopening `lastDir`
+      // right after launch arrives before this point 鈥?and reopening `lastDir`
       // afterwards is a *later* open, which would win and silently replace the
       // folder the user had just dropped. That is the "quick drag does nothing"
       // report.
@@ -330,7 +361,7 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
   //
   // This gate is a piece of state rather than a ref read inside the effect:
   // effects run in declaration order, so a ref-based guard would already read
-  // `true` on the first pass and write defaults over the user's real file —
+  // `true` on the first pass and write defaults over the user's real file 鈥?
   // which silently reset layout, language and last folder on every launch.
   useEffect(() => {
     if (!restored) return
@@ -385,7 +416,7 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
    * Which scan the wall is currently waiting for.
    *
    * Every open bumps this. When a scan resolves, it only applies if no later
-   * open has started in the meantime — otherwise dropping several folders in a
+   * open has started in the meantime 鈥?otherwise dropping several folders in a
    * row leaves the wall showing whichever scan the disk finished last, which is
    * not the folder the user dropped last.
    */
@@ -466,8 +497,8 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
   /**
    * Open a path the user handed to the app.
    *
-   * Used by both entry points — a drop on the window and Explorer's "Open with"
-   * — so they cannot drift apart. A folder opens at the top; a single photo
+   * Used by both entry points 鈥?a drop on the window and Explorer's "Open with"
+   * 鈥?so they cannot drift apart. A folder opens at the top; a single photo
    * opens its folder *and* focuses that photo, which is what "open this picture"
    * means to the user.
    *
@@ -490,7 +521,7 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
         const result = await window.photoStream.openDropped(path, recursiveRef.current)
         // A later drop has taken over: this result is for a folder the user
         // moved on from, so it must not replace the wall they are now looking
-        // at. Dropping several folders in a row is exactly this case — the
+        // at. Dropping several folders in a row is exactly this case 鈥?the
         // scans finish in whatever order the disk decides.
         if (!finishScan(generation)) return
         dispatch({ type: 'scan/success', dir: result.dir, photos: result.photos })
@@ -525,7 +556,7 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
   const openDroppedRef = useRef(openDropped)
   openDroppedRef.current = openDropped
 
-  // A photo handed over from Explorer ("Open with → PhotoStream"). The main
+  // A photo handed over from Explorer ("Open with 鈫?PhotoStream"). The main
   // process forwards it here instead of opening a second window, so a
   // right-click launch behaves exactly like dropping the file.
   useEffect(() => {
@@ -557,7 +588,7 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
    * This is what makes zooming back out cheap again: the tile returns to its
    * 512px WebP and the browser releases the decoded original. Previously the
    * highest level ever received was kept, so one zoom-in pinned every visited
-   * tile to a multi-megapixel image — 1239 MB in the renderer after a single
+   * tile to a multi-megapixel image 鈥?1239 MB in the renderer after a single
    * in-and-out gesture.
    *
    * A level that has not arrived yet falls back to one that has, preferring
@@ -583,8 +614,8 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
    *
    * While a scroll target is pending it asks for nothing at all. A drag emits a
    * transform per pointer event and each one brings a fresh band into view, so
-   * this effect fired tens of times a second with ~70 photos each — measured at
-   * 30+ batches of 60–80 tiles during a single sweep. The main process encodes
+   * this effect fired tens of times a second with ~70 photos each 鈥?measured at
+   * 30+ batches of 60鈥?0 tiles during a single sweep. The main process encodes
    * four images at a time, so those bands did not arrive sooner; they filled the
    * queue, and the destination the drag was heading for sat behind all of them.
    * A measured drag left all 84 mounted tiles blank for the full 5 s window,
@@ -599,9 +630,13 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
   useEffect(() => {
     if (scrollTargetY !== null) return
 
+    // Ordered by the same rule the wall mounts tiles by 鈥?nearest to the viewport
+    // centre first. Taking layout order instead loaded the *top* rows while the
+    // cull kept the tiles *around the centre*, so the two sets barely overlapped:
+    // zoomed out, where the cap bites, all 600 mounted tiles were blank.
     const pending = visiblePhotos
       .filter((photo) => visibleIds.has(photo.id) && !requested.current.has(`${photo.id}:${thumbLevel}`))
-      .slice(0, 400)
+      .slice(0, REQUEST_BATCH)
     if (pending.length === 0) return
 
     for (const photo of pending) requested.current.add(`${photo.id}:${thumbLevel}`)
@@ -621,7 +656,7 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
    * obvious from the idea alone:
    *
    * 1. **A small batch.** The main process encodes four images at a time, so a
-   *    request for hundreds of tiles does not arrive sooner — it *occupies* the
+   *    request for hundreds of tiles does not arrive sooner 鈥?it *occupies* the
    *    queue. An earlier version asked for the whole padded band and made the
    *    landing worse: 15 s after a jump, 14 of 81 visible tiles still had no
    *    image, because the visible ones were behind the prefetch in the queue.
@@ -721,6 +756,7 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
     state,
     visiblePhotos,
     layout,
+    mounted,
     thumbLevel,
     thumbUrls,
     transform,

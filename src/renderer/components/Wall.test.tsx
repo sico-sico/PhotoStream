@@ -1,8 +1,9 @@
-// @vitest-environment jsdom
+﻿// @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import type { Photo } from '@shared/types'
 import { I18nProvider } from '../i18n/I18nProvider'
+import { cullItems } from '@shared/cull'
 import { Wall } from './Wall'
 import type { PanZoomHandlers } from '../hooks/usePanZoom'
 
@@ -33,9 +34,9 @@ function renderWall(props: Partial<React.ComponentProps<typeof Wall>> = {}): Ret
       <Wall
         layout={layout}
         photos={photos}
+        mounted={cullItems(layout, { scale: 2, x: 10, y: 20 }, 1200, 800)}
         thumbUrls={{ a: 'pic://thumb/a-wall.webp' }}
         transform={{ scale: 2, x: 10, y: 20 }}
-        viewport={{ width: 1200, height: 800 }}
         square={false}
         selectedId={null}
         handlers={handlers}
@@ -73,9 +74,9 @@ describe('Wall', () => {
         <Wall
           layout={{ items, width: 2000, height: 2000 }}
           photos={many}
+          mounted={cullItems({ items }, { scale: 1, x: 0, y: 0 }, 400, 400)}
           thumbUrls={{}}
           transform={{ scale: 1, x: 0, y: 0 }}
-          viewport={{ width: 400, height: 400 }}
           square={false}
           selectedId={null}
           handlers={handlers}
@@ -115,9 +116,9 @@ describe('Wall', () => {
           <Wall
             layout={{ items, width: 1000, height: 2000 }}
             photos={many}
+            mounted={cullItems({ items }, { scale: 1, x: 0, y }, 300, 300)}
             thumbUrls={{}}
             transform={{ scale: 1, x: 0, y }}
-            viewport={{ width: 300, height: 300 }}
             square={false}
             selectedId={null}
             handlers={handlers}
@@ -199,9 +200,9 @@ describe('Wall', () => {
         <Wall
           layout={layout}
           photos={photos}
+          mounted={cullItems(layout, { scale: 2, x: 10, y: 20 }, 1200, 800)}
           thumbUrls={{ a: 'pic://thumb/a-wall.webp' }}
           transform={{ scale: 2, x: 10, y: 20 }}
-          viewport={{ width: 1200, height: 800 }}
           square
           selectedId={null}
           handlers={handlers}
@@ -222,9 +223,9 @@ describe('Wall', () => {
         <Wall
           layout={layout}
           photos={photos}
+          mounted={cullItems(layout, { scale: 1, x: 0, y: 0 }, 1200, 800)}
           thumbUrls={{}}
           transform={{ scale: 1, x: 0, y: 0 }}
-          viewport={{ width: 1200, height: 800 }}
           square={false}
           selectedId={null}
           handlers={handlers}

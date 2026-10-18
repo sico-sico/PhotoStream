@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AboutDialog } from './components/AboutDialog'
 import { FilterPanel } from './components/FilterPanel'
 import { Toolbar } from './components/Toolbar'
@@ -123,7 +123,7 @@ function AppView({
    *
    * Stable callbacks are essential here: the hook subscribes to window events,
    * so an inline arrow would tear down and re-add five listeners on every
-   * render — including every frame of a drag.
+   * render 鈥?including every frame of a drag.
    */
   const openDropped = wall.openDropped
   const pathForFile = useCallback((file: File) => window.photoStream.pathForFile(file), [])
@@ -151,7 +151,7 @@ function AppView({
    *
    * The world dimensions are deliberately not part of this key. Zooming out
    * re-lays the wall out at a wider width so the columns fill the window, and an
-   * earlier version keyed the fit on those dimensions — so every zoom step
+   * earlier version keyed the fit on those dimensions 鈥?so every zoom step
    * looked like "a new wall" and snapped the view back to the top-left, which
    * the user saw as being thrown back to the first photo.
    */
@@ -174,7 +174,7 @@ function AppView({
   /**
    * Centre the wall on the photo the user opened from outside.
    *
-   * Dropping a photo — or launching with "Open with → PhotoStream" — opens its
+   * Dropping a photo 鈥?or launching with "Open with 鈫?PhotoStream" 鈥?opens its
    * folder and focuses the file, but focusing alone only lights up a tile: on a
    * wall of thousands the tile may be far off screen. This scrolls it into view
    * once the layout for the new folder exists.
@@ -237,7 +237,7 @@ function AppView({
    * Panning must stay on the bare arrows. An earlier version switched them to
    * "walk the selection" whenever a photo was focused, which meant that simply
    * viewing a photo and closing the viewer silently took away the ability to
-   * pan — the wall then only crept one tile at a time around the selection.
+   * pan 鈥?the wall then only crept one tile at a time around the selection.
    * Alt is the modifier used for the rarer action instead.
    *
    * Four things must not be hijacked:
@@ -256,7 +256,7 @@ function AppView({
       if (target?.closest('input, textarea, select, [contenteditable="true"]')) return
       if (target?.closest('.menu-panel')) return
 
-      // Enter / Space opens the focused photo — the keyboard equivalent of
+      // Enter / Space opens the focused photo 鈥?the keyboard equivalent of
       // clicking the tile that Alt+arrows has walked to.
       if (event.key === 'Enter' || event.key === ' ') {
         if (!wall.state.selectedId) return
@@ -351,9 +351,9 @@ function AppView({
             ref={wallRef}
             layout={wall.layout}
             photos={wall.visiblePhotos}
+            mounted={wall.mounted}
             thumbUrls={wall.thumbUrls}
             transform={wall.transform}
-            viewport={{ width: viewport.width, height: viewport.height }}
             square={wall.state.layout === 'square'}
             selectedId={wall.state.selectedId}
             handlers={handlers}
