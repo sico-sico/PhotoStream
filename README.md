@@ -15,6 +15,7 @@ PhotoStream 把一个文件夹的 JPEG 铺成一面可以自由拖动、缩放�
   - [为什么用它](#为什么用它)
   - [安装与运行](#安装与运行)
   - [从源码构建](#从源码构建)
+    - [持续集成](#持续集成)
   - [功能](#功能)
   - [怎么用](#怎么用)
   - [快捷键](#快捷键)
@@ -61,6 +62,23 @@ npm run verify       # typecheck + 覆盖率测试 + 端到端测试
 | `npm run icon` | 由 `build/icon.svg` 重新生成 `icon.ico` / `icon.png` |
 
 修改应用图标：编辑 `build/icon.svg`，然后运行 `npm run icon`（生成 16/24/32/48/64/128/256 各尺寸）。
+
+### 持续集成
+
+`.github/workflows/ci.yml` 在每次推送到 `main` 和每个 PR 上运行，全部在 `windows-latest` 上：类型检查 → 覆盖率测试（70% 门槛）→ 端到端测试。失败时上传 Playwright 的 trace。
+
+只跑 Windows 是有原因的：文件监听用 `fs.watch({ recursive: true })`（Node 仅 Windows/macOS 支持），且测试里有 `D:\...` 字面量，在 Linux 上失败的原因与改动无关。
+
+`.github/workflows/release.yml` 由 tag 触发：
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+它会重新跑类型检查、单元测试与打包，然后用 `npm run smoke:portable` **启动打包好的 exe** 验证 asar 路径、解包的原生模块和 `pic://` 协议，最后把 zip 附到 GitHub Release。
+
+> Electron 44 没有 `postinstall` 脚本，运行时会懒下载。两个 workflow 都显式执行了 `npx install-electron`，把这次约 100 MB 的下载从测试步骤里挪出来 —— 否则它会在 e2e 中途发生，慢的时候看起来像测试超时。
 
 ## 功能
 

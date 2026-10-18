@@ -1,0 +1,92 @@
+name: Release
+
+# Tags only. A release is a deliberate act, so it must not be triggered by a
+# merge that happened to bump a version.
+#
+#   git tag v0.2.0 && git push origin v0.2.0
+#
+# The tag is not checked against package.json — that would block a hotfix tag
+# for a typo. The build stamps its own version into the artifact name, so a
+# mismatch is visible in the release rather than silently wrong.
+on:
+  push:
+    tags: ['v*']
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write # required to create the release and upload assets
+
+jobs:
+  build:
+    name: Portable Windows build
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Cache Electron download
+        uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: electron-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: npm ci
+
+      # electron@44 has no postinstall script; the runtime is fetched on demand.
+      # Doing it explicitly keeps a slow download out of the packaging step.
+      - name: Fetch Electron runtime
+        run: npx install-electron
+
+      # A release that does not typecheck or pass its unit tests must not be
+      # published. e2e is deliberately not repeated here: it already ran on the
+      # commit this tag points at, and it needs a 30 s build for no extra signal.
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm run test
+
+      - name: Package portable build
+        run: npm run dist
+
+      # Launching the packaged exe is the only way to catch faults that do not
+      # exist in development: asar path resolution, the unpacked sharp/libvips
+      # binaries, and the custom `pic://` protocol.
+      - name: Smoke-test the packaged build
+        run: npm run smoke:portable
+
+      - name: Zip the portable folder
+        shell: pwsh
+        run: |
+          # The smoke test launched the exe, which creates PhotoStreamData next to
+          # it. Shipping that folder would hand every user a pre-seeded settings
+          # file from the build machine, so it is removed before zipping.
+          Remove-Item 'release/PhotoStream-portable-win-x64/PhotoStreamData' -Recurse -Force -ErrorAction SilentlyContinue
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $name = "PhotoStream-$version-portable-win-x64"
+          Compress-Archive -Path 'release/PhotoStream-portable-win-x64/*' -DestinationPath "$name.zip"
+          "ASSET_NAME=$name.zip" >> $env:GITHUB_ENV
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ASSET_NAME }}
+          # A tag push is a finished build, so this is a real release rather
+          # than a draft; drafts are for hand-curated notes.
+          draft: false
+          generate_release_notes: true
+          body: |
+            Windows x64 便携版。解压后直接运行 `PhotoStream.exe`，无需安装。
+
+            所有数据写在 exe 同级的 `PhotoStreamData/`，移动整个文件夹即可迁移。

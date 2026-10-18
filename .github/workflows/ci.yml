@@ -1,0 +1,108 @@
+name: CI
+
+# Every push to main and every pull request. `workflow_dispatch` is here so a
+# suspected flake can be re-run without pushing an empty commit.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A superseded run is worthless once a newer commit exists, and e2e is the slow
+# part. Cancelling saves the queue time rather than cancelling a useful run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Typecheck, unit tests, e2e
+    # Windows only, and not by preference:
+    # - `fs.watch({ recursive: true })` is used for the file watcher and is
+    #   Windows/macOS-only on Node.
+    # - path modules are `node:path` (win32 semantics on Windows), and several
+    #   tests assert on `D:\...` literals. On Linux they fail for reasons that
+    #   have nothing to do with the change under test.
+    # - the app ships as a Windows portable build, so that is the only platform
+    #   worth gating.
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          # `cache: npm` keys on package-lock.json, which is committed.
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Cached separately from npm's cache, because the Electron runtime is not
+      # an npm package: it is a ~100 MB zip fetched on demand. Restoring it skips
+      # the download entirely on a lockfile-identical commit.
+      - name: Cache Electron runtime
+        uses: actions/cache@v4
+        with:
+          # `install.js` extracts here; `@electron/get` keeps its zip cache here.
+          path: |
+            node_modules/electron/dist
+            node_modules/electron/path.txt
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: electron-${{ runner.os }}-
+
+      # `npm ci` does not fetch the Electron runtime: electron@44 has no
+      # postinstall script, it downloads lazily the first time `require
+      # ('electron')` runs. Left alone that happens in the middle of the e2e
+      # step, where a slow or failed download looks like a mysterious test
+      # timeout. Doing it here keeps the network-dependent part in its own step.
+      #
+      # `install.js` reads `config.electron_mirror` from package.json, so this
+      # uses the same mirror a local build does. It takes no arguments and exits
+      # immediately when the runtime is already in place, so a cache hit costs
+      # nothing.
+      - name: Fetch Electron runtime
+        run: npx install-electron
+
+      # Runs both TS projects and aggregates their errors, so one pass reports
+      # every problem instead of stopping at the first.
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Covers the 70% floor in vitest.config.ts: a feature landing with no
+      # tests fails here rather than being noticed later.
+      - name: Unit and integration tests
+        run: npm run test:coverage
+
+      # Builds first (the config points at out/main/index.js), then drives a
+      # real Electron process against a temporary photo library.
+      # No `playwright install` step: these tests use Playwright's Electron
+      # support, which launches the app's own Chromium.
+      - name: End-to-end tests
+        run: npm run test:e2e
+
+      # Traces are the only practical way to debug a CI-only timing failure,
+      # and they are deleted with the runner without this.
+      - name: Upload Playwright traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 7

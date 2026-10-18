@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { DEFAULT_RING_SIZE } from '@shared/types'
 import { I18nProvider } from '../i18n/I18nProvider'
 import { Toolbar } from './Toolbar'
 
@@ -44,6 +45,8 @@ function renderToolbar(props: Partial<React.ComponentProps<typeof Toolbar>> = {}
         history={['/photos/trip', '/photos/2019']}
         recursive={false}
         onRecursiveChange={() => {}}
+        ringSize={DEFAULT_RING_SIZE}
+        onRingSizeChange={() => {}}
         onChooseFolder={() => {}}
         onOpenHistory={() => {}}
         onRemoveHistory={() => {}}
