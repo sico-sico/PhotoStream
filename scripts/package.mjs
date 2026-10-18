@@ -9,7 +9,7 @@
  * portable build needs — the user unzips it and runs the exe.
  */
 import { packager } from '@electron/packager'
-import { rm, rename, mkdir, cp } from 'node:fs/promises'
+import { rm, rename, mkdir, cp, readdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -17,6 +17,45 @@ import { fileURLToPath } from 'node:url'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const releaseDir = join(root, 'release')
 const appName = 'PhotoStream'
+
+/**
+ * Chromium locale packs to keep.
+ *
+ * Electron ships one `.pak` per UI language — 55 of them, 1.4–1.7 MB each and
+ * 48 MB in total — but the app translates its own strings through
+ * `shared/i18n`. The Chromium bundles are only consulted for built-in pieces
+ * (context menus, file dialogs, form validation bubbles), so keeping every
+ * language would mean shipping ~45 MB of text nobody can reach.
+ *
+ * The list covers the three shipped languages plus the two variants Windows
+ * commonly reports (`en-GB`, `zh-TW`); anything else falls back to `en-US`.
+ */
+const KEPT_LOCALES = ['en-US.pak', 'en-GB.pak', 'zh-CN.pak', 'zh-TW.pak', 'fr.pak']
+
+/**
+ * Remove files from the packaged bundle that the app cannot use.
+ *
+ * Runs after the packager finishes, because these files come from the Electron
+ * distribution rather than from this repository — `ignore` only filters our own
+ * sources.
+ */
+async function pruneBundle(portable) {
+  const removed = []
+
+  const localesDir = join(portable, 'locales')
+  if (existsSync(localesDir)) {
+    for (const name of await readdir(localesDir)) {
+      if (KEPT_LOCALES.includes(name)) continue
+      await rm(join(localesDir, name), { recursive: true, force: true })
+      removed.push(`locales/${name}`)
+    }
+  }
+
+  // `LICENSES.chromium.html` is a 19.5 MB legal notice. Shipping it is the
+  // correct thing for a distributed product, so it is deliberately kept; it is
+  // listed here only to document the decision.
+  return removed
+}
 
 async function main() {
   // Start from a clean slate so a stale bundle cannot be mistaken for a new one.
@@ -46,6 +85,7 @@ async function main() {
       /^\/test-results($|\/)/,
       /^\/playwright-report($|\/)/,
       /^\/coverage($|\/)/,
+      /^\/docs($|\/)/,
       /^\/[^/]*\.(md|log)$/,
       /^\/(vitest|playwright|electron\.vite)\.config\.ts$/,
       /^\/tsconfig.*\.json$/,
@@ -60,6 +100,9 @@ async function main() {
   const bundled = join(releaseDir, `${appName}-win32-x64`)
   const portable = join(releaseDir, `${appName}-portable-win-x64`)
   if (existsSync(bundled)) await rename(bundled, portable)
+
+  const removed = await pruneBundle(portable)
+  if (removed.length > 0) console.log(`Pruned ${removed.length} unused Chromium locale pack(s).`)
 
   // Ship the notes next to the exe: the portable build has no installer to
   // explain where the data lives.
