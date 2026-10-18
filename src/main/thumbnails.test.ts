@@ -62,6 +62,30 @@ describe('thumbPath', () => {
     expect(thumbPath(cacheDir, request('wall'))).toMatch(/-wall\.webp$/)
     expect(thumbPath(cacheDir, request('zoom'))).toMatch(/-zoom\.webp$/)
   })
+
+  it('serves the zoom tier from the wall file when the source is too small', () => {
+    // `withoutEnlargement` means a 300x200 source encodes to 300x200 at both
+    // tiers: the same pixels twice. Measured: 200 B for wall, 192 B for zoom.
+    const small: ThumbRequest = { ...request('zoom'), sourceWidth: 300, sourceHeight: 200 }
+    expect(thumbPath(cacheDir, small)).toBe(
+      thumbPath(cacheDir, { ...request('wall'), sourceWidth: 300, sourceHeight: 200 })
+    )
+  })
+
+  it('keeps a separate zoom file when the source is large enough to fill it', () => {
+    const large: ThumbRequest = { ...request('zoom'), sourceWidth: 6000, sourceHeight: 4000 }
+    expect(thumbPath(cacheDir, large)).toMatch(/-zoom\.webp$/)
+    expect(thumbPath(cacheDir, large)).not.toBe(
+      thumbPath(cacheDir, { ...request('wall'), sourceWidth: 6000, sourceHeight: 4000 })
+    )
+  })
+
+  it('keeps the zoom tier when the source size is unknown', () => {
+    // Missing dimensions are a scan that could not read them. Generating a
+    // possibly-redundant file costs disk; skipping a needed one leaves the tile
+    // permanently soft, which is the worse failure.
+    expect(thumbPath(cacheDir, request('zoom'))).toMatch(/-zoom\.webp$/)
+  })
 })
 
 describe('ensureThumbnail', () => {
@@ -82,6 +106,33 @@ describe('ensureThumbnail', () => {
     const file = await ensureThumbnail(cacheDir, request('wall'))
     const metadata = await sharp(file).metadata()
     expect(metadata.width).toBe(200)
+  })
+
+  it('writes only one file for a source smaller than the wall tier', async () => {
+    // The saving this is for: a small photo used to cost two encodes and two
+    // files for one set of pixels. Asking for both tiers must now leave a single
+    // file on disk, and both requests must resolve to it.
+    await makeSource(300, 200)
+    const dims = { sourceWidth: 300, sourceHeight: 200 }
+
+    const wall = await ensureThumbnail(cacheDir, { ...request('wall'), ...dims })
+    const zoom = await ensureThumbnail(cacheDir, { ...request('zoom'), ...dims })
+
+    expect(zoom).toBe(wall)
+    const files = await allFiles(cacheDir)
+    expect(files).toHaveLength(1)
+    expect(files[0]).toMatch(/-wall\.webp$/)
+  })
+
+  it('still writes both tiers for a source that can fill them', async () => {
+    const dims = { sourceWidth: 1200, sourceHeight: 800 }
+    const wall = await ensureThumbnail(cacheDir, { ...request('wall'), ...dims })
+    const zoom = await ensureThumbnail(cacheDir, { ...request('zoom'), ...dims })
+
+    expect(zoom).not.toBe(wall)
+    expect(await allFiles(cacheDir)).toHaveLength(2)
+    // And the zoom file really is bigger, so the second tier is not pure waste.
+    expect((await stat(zoom)).size).toBeGreaterThan((await stat(wall)).size)
   })
 
   it('reuses an existing thumbnail instead of re-encoding', async () => {

@@ -44,6 +44,29 @@ export function pickThumbLevel(worldPixels: number, scale: number, devicePixelRa
 }
 
 /**
+ * Whether a `zoom` rendition of this photo would hold more detail than `wall`.
+ *
+ * `buildThumbnail` resizes with `withoutEnlargement`, so a 300x200 JPEG yields a
+ * 300x200 `wall` file *and* a 300x200 `zoom` file: the same pixels, encoded
+ * twice, differing only in WebP quality. Measured on a 300x200 source: 200 B for
+ * `wall`, 192 B for `zoom` — two files, no extra detail. The second encode is
+ * pure cost, and it happens for every small image in the library.
+ *
+ * Deciding from the source dimensions rather than the target ones is what makes
+ * this possible: the scan has already parsed `width`/`height` for every photo, so
+ * no extra file read is needed.
+ *
+ * Non-positive or unknown dimensions return `true`, the safe answer: generating a
+ * rendition that may be redundant costs disk, while skipping one that was needed
+ * would leave the tile permanently soft.
+ */
+export function zoomTierAddsDetail(width: number, height: number): boolean {
+  if (!(width > 0) || !(height > 0)) return true
+  const longEdge = Math.max(width, height)
+  return longEdge > THUMB_SIZES.wall
+}
+
+/**
  * How many leading hash characters become directory names.
  *
  * Two levels of one character each (`ab/cd/…`), which is what Lightroom does:

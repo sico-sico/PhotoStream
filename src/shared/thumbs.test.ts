@@ -1,5 +1,42 @@
 import { describe, expect, it } from 'vitest'
-import { THUMB_SHARD_DEPTH, THUMB_SIZES, hash64, pickThumbLevel, thumbKey } from './thumbs'
+import {
+  THUMB_SHARD_DEPTH,
+  THUMB_SIZES,
+  hash64,
+  pickThumbLevel,
+  thumbKey,
+  zoomTierAddsDetail
+} from './thumbs'
+
+describe('zoomTierAddsDetail', () => {
+  it('says a source below the wall size gains nothing from a zoom rendition', () => {
+    // Both tiers encode to the source's own pixels because of
+    // `withoutEnlargement`, so the second file is the same image twice.
+    expect(zoomTierAddsDetail(300, 200)).toBe(false)
+    expect(zoomTierAddsDetail(64, 64)).toBe(false)
+    // Exactly at the wall size: the wall file already holds every pixel.
+    expect(zoomTierAddsDetail(THUMB_SIZES.wall, THUMB_SIZES.wall)).toBe(false)
+  })
+
+  it('says a larger source gains detail', () => {
+    expect(zoomTierAddsDetail(6000, 4000)).toBe(true)
+    expect(zoomTierAddsDetail(THUMB_SIZES.wall + 1, 100)).toBe(true)
+  })
+
+  it('judges by the long edge, so a tall narrow photo is measured correctly', () => {
+    // 200x900 has a long edge past the wall size, so `wall` downsamples it.
+    expect(zoomTierAddsDetail(200, 900)).toBe(true)
+    // 100x400 does not, so `wall` is already the original pixels.
+    expect(zoomTierAddsDetail(100, 400)).toBe(false)
+  })
+
+  it('keeps the tier when the dimensions are unknown', () => {
+    // A scan that could not read the size must not silently downgrade the
+    // image; an extra file is cheaper than a permanently soft tile.
+    expect(zoomTierAddsDetail(0, 0)).toBe(true)
+    expect(zoomTierAddsDetail(-1, 500)).toBe(true)
+  })
+})
 
 describe('pickThumbLevel', () => {
   it('uses the wall level for tiles smaller than the wall rendition', () => {

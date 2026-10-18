@@ -2,7 +2,7 @@ import sharp from 'sharp'
 import { mkdir, rename, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { ThumbLevel, ThumbPriority } from '../shared/types'
-import { THUMB_SIZES, thumbKey } from '../shared/thumbs'
+import { THUMB_SIZES, thumbKey, zoomTierAddsDetail } from '../shared/thumbs'
 
 /**
  * Thumbnail generation.
@@ -40,6 +40,29 @@ export interface ThumbRequest {
   sizeBytes: number
   /** Only the cached levels are ever generated; `full` streams the original. */
   level: Exclude<ThumbLevel, 'full'>
+  /**
+   * Pixel dimensions of the source, as parsed during the scan.
+   *
+   * Used to skip a `zoom` rendition that cannot hold more detail than `wall`.
+   * Absent is treated as "unknown", which keeps the rendition.
+   */
+  sourceWidth?: number
+  sourceHeight?: number
+}
+
+/**
+ * The level a request actually produces.
+ *
+ * A `zoom` rendition of a photo whose long edge is already within the `wall`
+ * size would hold exactly the same pixels — `buildThumbnail` never enlarges —
+ * so it is served from the `wall` file instead. That saves one encode and one
+ * file per small photo, which is the whole cost of the second tier for them.
+ */
+export function effectiveLevel(request: ThumbRequest): Exclude<ThumbLevel, 'full'> {
+  if (request.level !== 'zoom') return request.level
+  const width = request.sourceWidth ?? 0
+  const height = request.sourceHeight ?? 0
+  return zoomTierAddsDetail(width, height) ? 'zoom' : 'wall'
 }
 
 /**
@@ -51,7 +74,10 @@ export interface ThumbRequest {
  * tests can call repeatedly.
  */
 export function thumbPath(cacheDir: string, request: ThumbRequest): string {
-  return join(cacheDir, thumbKey(request.sourcePath, request.mtimeMs, request.sizeBytes, request.level))
+  return join(
+    cacheDir,
+    thumbKey(request.sourcePath, request.mtimeMs, request.sizeBytes, effectiveLevel(request))
+  )
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -160,7 +186,8 @@ async function buildThumbnail(target: string, request: ThumbRequest): Promise<st
   if (await exists(target)) return target
 
   await mkdir(dirname(target), { recursive: true })
-  const size = THUMB_SIZES[request.level]
+  const size = THUMB_SIZES[effectiveLevel(request)]
+  const quality = THUMB_QUALITY[effectiveLevel(request)]
   // Unique per attempt: two *processes* can still race (unlikely here), and a
   // shared temp name would corrupt both outputs.
   const temp = `${target}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`
@@ -170,7 +197,7 @@ async function buildThumbnail(target: string, request: ThumbRequest): Promise<st
       // Honour EXIF orientation even though these exports are already baked.
       .rotate()
       .resize({ width: size, height: size, fit: 'inside', withoutEnlargement: true })
-      .webp({ quality: THUMB_QUALITY[request.level], effort: 4 })
+      .webp({ quality, effort: 4 })
       .toFile(temp)
     await rename(temp, target)
     return target

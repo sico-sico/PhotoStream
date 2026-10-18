@@ -289,7 +289,11 @@ function toThumbRequest(photo: Photo, level: Exclude<ThumbLevel, 'full'>): Thumb
     sourcePath: photo.path,
     mtimeMs: photo.mtimeMs,
     sizeBytes: photo.sizeBytes,
-    level
+    level,
+    // From the scan, so no extra read is needed to decide whether a `zoom`
+    // rendition of this photo would hold more detail than `wall`.
+    sourceWidth: photo.width,
+    sourceHeight: photo.height
   }
 }
 
