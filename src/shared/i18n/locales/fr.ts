@@ -40,6 +40,8 @@ export const fr: Catalog = {
   'viewer.close': 'Fermer la visionneuse',
   'viewer.reveal': 'Afficher dans le dossier',
   'viewer.fit': 'Ajuster',
+  'viewer.rotateLeft': 'Pivoter à gauche',
+  'viewer.rotateRight': 'Pivoter à droite',
   'viewer.noDate': 'aucune date de prise de vue',
   'viewer.size': '{width}×{height}',
 

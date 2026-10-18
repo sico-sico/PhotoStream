@@ -4,19 +4,22 @@ import {
   MAX_SCALE,
   MIN_FIT_SCALE,
   MIN_SCALE,
-  VIEWER_MAX_ZOOM,
-  VIEWER_MIN_ZOOM,
   clampScale,
   clampViewerTransform,
+  containSize,
   fitTransform,
   fitWallTransform,
+  normalizeRotation,
   panBy,
+  rotatedSize,
   screenToWorld,
   transformsEqual,
+  viewerFitScale,
   visibleWorldRect,
   worldToScreen,
   zoomAt,
-  zoomByWheel
+  zoomByWheel,
+  zoomViewerAbout
 } from './transform'
 
 describe('screen/world conversion', () => {
@@ -217,54 +220,240 @@ describe('fitWallTransform', () => {
   })
 })
 
+describe('containSize', () => {
+  it('letterboxes a wide photo into a square box', () => {
+    // 3:2 into 500x500 leaves horizontal bars, not a stretched photo.
+    expect(containSize(3000, 2000, 500, 500)).toEqual({ width: 500, height: 500 * (2000 / 3000) })
+  })
+
+  it('pillarboxes a tall photo', () => {
+    const box = containSize(1000, 2000, 600, 600)
+    expect(box.width).toBe(300)
+    expect(box.height).toBe(600)
+  })
+
+  it('never exceeds either side of the box', () => {
+    const box = containSize(2400, 1600, 1552, 920)
+    expect(box.width).toBeLessThanOrEqual(1552)
+    expect(box.height).toBeLessThanOrEqual(920)
+    // One axis is the limiting one, so it must be exactly filled.
+    expect(Math.max(box.width, box.height)).toBeGreaterThan(0)
+    expect(box.height).toBeCloseTo(920, 6)
+  })
+
+  it('reports the photo smaller than its element box', () => {
+    // This is the bug that made the viewer shrink a fitted photo: the `<img>`
+    // element was 1552x1035 while `object-fit` drew it at 1416x944.
+    const box = containSize(2400, 1600, 1552, 920)
+    expect(box.width).toBeLessThan(1552)
+    expect(box.height).toBeLessThanOrEqual(920)
+  })
+
+  it('returns an empty size for a degenerate input', () => {
+    expect(containSize(0, 100, 500, 500)).toEqual({ width: 0, height: 0 })
+    expect(containSize(100, 0, 500, 500)).toEqual({ width: 0, height: 0 })
+    expect(containSize(100, 100, 0, 500)).toEqual({ width: 0, height: 0 })
+    expect(containSize(100, 100, 500, -1)).toEqual({ width: 0, height: 0 })
+  })
+})
+
+describe('normalizeRotation', () => {
+  it('snaps to the nearest quarter turn', () => {
+    expect(normalizeRotation(90)).toBe(90)
+    expect(normalizeRotation(360)).toBe(0)
+    expect(normalizeRotation(450)).toBe(90)
+    expect(normalizeRotation(180)).toBe(180)
+  })
+
+  it('keeps a left turn negative instead of wrapping to 270', () => {
+    // The toolbar label shows the angle; "-90°" reads as a left turn, "270°"
+    // does not.
+    expect(normalizeRotation(-90)).toBe(-90)
+    expect(normalizeRotation(-450)).toBe(-90)
+    expect(normalizeRotation(270)).toBe(-90)
+  })
+
+  it('rounds an arbitrary angle to the nearest quarter turn', () => {
+    // Rotating by a hand-drawn angle would leave the bounds computed for a box
+    // the photo does not occupy.
+    expect(normalizeRotation(44)).toBe(0)
+    expect(normalizeRotation(46)).toBe(90)
+    expect(normalizeRotation(-44)).toBe(0)
+  })
+
+  it('falls back to upright for a non-finite angle', () => {
+    expect(normalizeRotation(Number.NaN)).toBe(0)
+    expect(normalizeRotation(Number.POSITIVE_INFINITY)).toBe(0)
+  })
+})
+
+describe('rotatedSize', () => {
+  it('leaves an unrotated box alone', () => {
+    expect(rotatedSize(400, 300, 0)).toEqual({ width: 400, height: 300 })
+  })
+
+  it('swaps the axes at a quarter turn', () => {
+    expect(rotatedSize(400, 300, 90)).toEqual({ width: 300, height: 400 })
+    expect(rotatedSize(400, 300, 270)).toEqual({ width: 300, height: 400 })
+  })
+
+  it('is exact at half turns despite floating point cosine', () => {
+    // Math.cos(Math.PI) is -1 but Math.cos(90 * PI / 180) is 6.1e-17, which
+    // would leave a sub-pixel sliver of gap at the stage edge.
+    expect(rotatedSize(400, 300, 180)).toEqual({ width: 400, height: 300 })
+    expect(rotatedSize(400, 300, 90).height).toBe(400)
+  })
+
+  it('grows a square by up to the diagonal at 45 degrees', () => {
+    const box = rotatedSize(100, 100, 45)
+    expect(box.width).toBeCloseTo(141.42, 2)
+    expect(box.height).toBeCloseTo(141.42, 2)
+  })
+
+  it('treats a degenerate box as empty', () => {
+    expect(rotatedSize(0, 100, 90)).toEqual({ width: 0, height: 0 })
+    expect(rotatedSize(100, -5, 90)).toEqual({ width: 0, height: 0 })
+  })
+})
+
+describe('viewerFitScale', () => {
+  const stage = { viewportWidth: 1000, viewportHeight: 800 }
+
+  it('needs no shrink when the photo already fits', () => {
+    expect(viewerFitScale({ ...stage, imageWidth: 640, imageHeight: 480, rotation: 0 })).toBe(1)
+  })
+
+  it('shrinks a portrait photo turned landscape out of a tall stage', () => {
+    // 400x700 upright fits 800px of height; rotated it is 700x400 and fits too,
+    // so a rotation that still fits must not shrink the photo.
+    expect(viewerFitScale({ ...stage, imageWidth: 400, imageHeight: 700, rotation: 90 })).toBe(1)
+  })
+
+  it('shrinks when the rotated box no longer fits the stage', () => {
+    // A 990x790 photo fits; rotated it is 790x990 and overflows the 800px height.
+    const scale = viewerFitScale({ ...stage, imageWidth: 990, imageHeight: 790, rotation: 90 })
+    expect(scale).toBeLessThan(1)
+    expect(scale).toBeCloseTo(800 / 990, 5)
+  })
+
+  it('never scales a rotated photo up', () => {
+    // Rotating must not silently zoom: that would leave the user wondering why
+    // an orientation control changed the magnification.
+    expect(viewerFitScale({ ...stage, imageWidth: 100, imageHeight: 100, rotation: 90 })).toBe(1)
+  })
+
+  it('returns 1 for a degenerate stage', () => {
+    expect(viewerFitScale({ ...stage, imageWidth: 0, imageHeight: 0, rotation: 90 })).toBe(1)
+    expect(viewerFitScale({ viewportWidth: 0, viewportHeight: 0, imageWidth: 400, imageHeight: 300, rotation: 90 })).toBe(1)
+  })
+})
+
 describe('clampViewerTransform', () => {
-  const viewport = { w: 1000, h: 800 }
+  // A photo that fills the stage when upright, so the numbers stay readable.
+  const geometry = {
+    viewportWidth: 1000,
+    viewportHeight: 800,
+    imageWidth: 1000,
+    imageHeight: 800,
+    rotation: 0,
+    minZoom: 1,
+    maxZoom: 8
+  }
 
   it('leaves a fitted photo untouched', () => {
     const t = { scale: 1, x: 0, y: 0 }
-    expect(clampViewerTransform(t, viewport.w, viewport.h, 1)).toEqual(t)
+    expect(clampViewerTransform(t, geometry)).toEqual(t)
   })
 
   it('bounds the zoom to the fit scale and the maximum factor', () => {
-    expect(clampViewerTransform({ scale: 0.2, x: 0, y: 0 }, viewport.w, viewport.h, 1).scale).toBe(VIEWER_MIN_ZOOM)
-    expect(clampViewerTransform({ scale: 999, x: 0, y: 0 }, viewport.w, viewport.h, 1).scale).toBe(VIEWER_MAX_ZOOM)
+    expect(clampViewerTransform({ scale: 0.2, x: 0, y: 0 }, geometry).scale).toBe(1)
+    expect(clampViewerTransform({ scale: 999, x: 0, y: 0 }, geometry).scale).toBe(8)
   })
 
   it('never shrinks below the fit scale', () => {
     // "Fit" is the zoomed-out limit: the whole photo is already visible.
-    const t = clampViewerTransform({ scale: 0.4, x: 0, y: 0 }, viewport.w, viewport.h, 2)
-    expect(t.scale).toBe(VIEWER_MIN_ZOOM * 2)
+    expect(clampViewerTransform({ scale: 0.4, x: 0, y: 0 }, { ...geometry, minZoom: 2 }).scale).toBe(2)
   })
 
-  it('centres horizontally when the photo is narrower than the stage', () => {
-    // fitScale 2 means the untransformed photo fills the stage, so at scale 2
-    // it is exactly the stage size and there is no slack to pan.
-    const t = clampViewerTransform({ scale: 2, x: 400, y: 0 }, viewport.w, viewport.h, 2)
+  it('centres a photo that is smaller than the stage on both axes', () => {
+    // At fit the photo exactly fills the stage, so no offset is allowed at all.
+    const t = clampViewerTransform({ scale: 1, x: 400, y: 300 }, geometry)
     expect(t.x).toBe(0)
+    expect(t.y).toBe(0)
   })
 
-  it('keeps part of a zoomed photo on screen when panned far right', () => {
-    // Dragging right by 5000px would otherwise push the photo completely out.
-    const t = clampViewerTransform({ scale: 2, x: 5000, y: 0 }, viewport.w, viewport.h, 1)
-    expect(t.x).toBeLessThanOrEqual(viewport.w * 0.75)
-  })
-
-  it('keeps part of a zoomed photo on screen when panned far left', () => {
-    const t = clampViewerTransform({ scale: 2, x: -5000, y: 0 }, viewport.w, viewport.h, 1)
-    // The photo is 2000px wide; at least a quarter of the viewport must overlap.
-    expect(t.x).toBeGreaterThanOrEqual(viewport.w - 2000 - viewport.w * 0.75)
+  it('allows panning up to the edge of a zoomed photo, never past it', () => {
+    // At 2x the photo is 2000x1600; the stage shows 1000x800 of it, so the
+    // centre may move by (2000-1000)/2 = 500 horizontally.
+    expect(clampViewerTransform({ scale: 2, x: 9999, y: 0 }, geometry).x).toBe(500)
+    expect(clampViewerTransform({ scale: 2, x: -9999, y: 0 }, geometry).x).toBe(-500)
+    expect(clampViewerTransform({ scale: 2, x: 0, y: 9999 }, geometry).y).toBe(400)
   })
 
   it('clamps both axes independently', () => {
-    const t = clampViewerTransform({ scale: 2, x: 5000, y: -5000 }, viewport.w, viewport.h, 1)
-    expect(t.x).toBeLessThanOrEqual(viewport.w)
-    expect(t.y).toBeGreaterThanOrEqual(-viewport.h * 2)
+    const t = clampViewerTransform({ scale: 2, x: 9999, y: -9999 }, geometry)
+    expect(t.x).toBe(500)
+    expect(t.y).toBe(-400)
+  })
+
+  it('uses the rotated box, so a quarter turn re-opens the vertical range', () => {
+    // Upright the photo is 1000x800. Rotated it is 800x1000, which no longer
+    // fits the 800px-tall stage, so it is first shrunk by 800/1000 = 0.8. At 2x
+    // the box is 1280x1600, leaving (1280-1000)/2 = 140 and (1600-800)/2 = 400
+    // of slack: the narrower photo pans less sideways but much further down.
+    const rotated = clampViewerTransform({ scale: 2, x: 9999, y: 9999 }, { ...geometry, rotation: 90 })
+    expect(rotated.x).toBe(140)
+    expect(rotated.y).toBe(400)
+  })
+
+  it('accounts for a rotation that needs the photo shrunk to fit', () => {
+    // A 990x790 photo fitted upright; rotated it must be scaled down to 800/990
+    // first, otherwise the clamp would allow a gap the stage cannot cover.
+    const t = clampViewerTransform(
+      { scale: 2, x: 9999, y: 0 },
+      { ...geometry, imageWidth: 990, imageHeight: 790, rotation: 90 }
+    )
+    const boxWidth = 790 * (800 / 990) * 2
+    expect(t.x).toBeCloseTo((boxWidth - 1000) / 2, 5)
   })
 
   it('returns the input for a degenerate stage', () => {
     const t = { scale: 2, x: 10, y: 10 }
-    expect(clampViewerTransform(t, 0, 0, 1)).toBe(t)
-    expect(clampViewerTransform(t, 100, 100, 0)).toBe(t)
+    expect(clampViewerTransform(t, { ...geometry, viewportWidth: 0, viewportHeight: 0 })).toBe(t)
+  })
+
+  it('only bounds the scale while the image size is still unknown', () => {
+    // Before the photo decodes there is no box to clamp against, but an
+    // unbounded scale would make the first wheel event jump.
+    const t = clampViewerTransform({ scale: 99, x: 5, y: 5 }, { ...geometry, imageWidth: 0, imageHeight: 0 })
+    expect(t.scale).toBe(8)
+    expect(t.x).toBe(5)
+  })
+})
+
+describe('zoomViewerAbout', () => {
+  it('keeps the pivot point pinned', () => {
+    // A point 200px right of centre stays 400px right at 2x.
+    const t = zoomViewerAbout({ scale: 1, x: 0, y: 0 }, 2, 200, 0, 1, 8)
+    expect(t.scale).toBe(2)
+    expect(t.x).toBe(-200)
+    // Under the same screen point: 200 = 2 * worldX + (-200) => worldX = 200.
+    expect((200 - t.x) / t.scale).toBeCloseTo(200, 10)
+  })
+
+  it('is a no-op when the scale does not change', () => {
+    const t = { scale: 2, x: 30, y: 40 }
+    expect(zoomViewerAbout(t, 2, 100, 100, 1, 8)).toEqual(t)
+  })
+
+  it('clamps the result to the bounds before solving the offset', () => {
+    const t = zoomViewerAbout({ scale: 1, x: 0, y: 0 }, 100, 100, 0, 1, 4)
+    expect(t.scale).toBe(4)
+  })
+
+  it('survives a zero starting scale', () => {
+    const t = zoomViewerAbout({ scale: 0, x: 0, y: 0 }, 2, 0, 0, 1, 8)
+    expect(t.scale).toBe(2)
   })
 })
 

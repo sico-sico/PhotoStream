@@ -231,48 +231,165 @@ export function viewerMaxZoom(naturalWidth: number, displayedWidth: number, devi
 }
 
 /**
- * Keep a panned/zoomed photo reachable.
+ * Snap a rotation to the nearest quarter turn.
  *
- * Without this, dragging far enough leaves the photo entirely off-screen with no
- * way back. Each axis is clamped so at least a quarter of the viewport's worth
- * of image stays inside; when the photo is smaller than the viewport on that
- * axis (zoomed out), it is centred instead.
- *
- * @param fitScale scale at which the photo exactly fills the viewport
+ * The result is normalised into `[-180, 180]`, not `[0, 360)`: turning a photo
+ * left once should read as -90° rather than 270°, and a half turn is shown as
+ * 180° so the label stays symmetric.
  */
-export function clampViewerTransform(
-  t: Transform,
-  viewportWidth: number,
-  viewportHeight: number,
-  fitScale: number
-): Transform {
-  if (!(fitScale > 0) || viewportWidth <= 0 || viewportHeight <= 0) return t
-
-  const min = fitScale * VIEWER_MIN_ZOOM
-  const max = fitScale * VIEWER_MAX_ZOOM
-  const scale = clampScale(t.scale, min, max)
-
-  // The photo's size at this scale, given that at `fitScale` it exactly fits.
-  const width = (viewportWidth * scale) / fitScale
-  const height = (viewportHeight * scale) / fitScale
-
-  const axis = (value: number, viewport: number, size: number): number => {
-    if (size <= viewport) {
-      // Smaller than the viewport: pin to the centre. Panning it around would
-      // only create empty space.
-      return (viewport - size) / 2
-    }
-    // Larger than the viewport: keep the edges outside it, so no blank gap can
-    // appear on either side. This is the same rule as any image viewer: you can
-    // pan to the corners, never past them.
-    return Math.min(Math.max(value, viewport - size), 0)
-  }
-
-  return { scale, x: axis(t.x, viewportWidth, width), y: axis(t.y, viewportHeight, height) }
+export function normalizeRotation(degrees: number): number {
+  if (!Number.isFinite(degrees)) return 0
+  const snapped = Math.round(degrees / 90) * 90
+  const wrapped = ((snapped % 360) + 360) % 360
+  return wrapped > 180 ? wrapped - 360 : wrapped
 }
 
-/** Visible world rectangle for a viewport, used for culling and LOD decisions. */
-export function visibleWorldRect(
+/**
+ * Axis-aligned size of a `width`x`height` box rotated by `rotation` degrees.
+ *
+ * A rotated photo is not the same rectangle: 90 degrees swaps width and height,
+ * and 45 degrees grows both by up to `sqrt(2)`. Every pan/zoom bound has to be
+ * derived from this box, or a rotated photo would either be draggable past its
+ * own edge (revealing blank space) or refuse to reach a corner.
+ */
+export function rotatedSize(
+  width: number,
+  height: number,
+  rotation: number
+): { width: number; height: number } {
+  if (!(width > 0) || !(height > 0)) return { width: 0, height: 0 }
+  const radians = ((rotation % 360) * Math.PI) / 180
+  // Rounding leaves a quarter turn with 6e-17 instead of 0. Snapping keeps the
+  // box exact, so a rotated photo pins to the edges like an unrotated one.
+  const cos = Math.abs(Math.cos(radians))
+  const sin = Math.abs(Math.sin(radians))
+  const c = cos > 1 - 1e-12 ? 1 : cos < 1e-12 ? 0 : cos
+  const s = sin > 1 - 1e-12 ? 1 : sin < 1e-12 ? 0 : sin
+  return { width: width * c + height * s, height: width * s + height * c }
+}
+
+/**
+ * Size an image occupies inside a box when letterboxed to preserve its aspect
+ * ratio, i.e. what CSS `object-fit: contain` renders.
+ *
+ * The photo's *element* box is not its visible size: a grid item with
+ * `max-width` can end up taller than its container, and `object-fit` then draws
+ * the photo smaller than the box. Bounds computed from the box would shrink a
+ * photo that already fits, so every measurement goes through this instead.
+ */
+export function containSize(
+  naturalWidth: number,
+  naturalHeight: number,
+  boxWidth: number,
+  boxHeight: number
+): { width: number; height: number } {
+  if (!(naturalWidth > 0) || !(naturalHeight > 0) || !(boxWidth > 0) || !(boxHeight > 0)) {
+    return { width: 0, height: 0 }
+  }
+  const ratio = Math.min(boxWidth / naturalWidth, boxHeight / naturalHeight)
+  return { width: naturalWidth * ratio, height: naturalHeight * ratio }
+}
+
+/** What the viewer knows about the stage and the photo it is showing. */
+export interface ViewerMetrics {
+  viewportWidth: number
+  viewportHeight: number
+  /** Size the photo actually occupies on screen when fitted, before rotation. */
+  imageWidth: number
+  imageHeight: number
+  /** Clockwise rotation in degrees. */
+  rotation: number
+}
+
+export interface ViewerGeometry extends ViewerMetrics {
+  /** Scale bounds, as a multiple of "fit". `1` shows the whole photo. */
+  minZoom: number
+  maxZoom: number
+}
+
+/**
+ * Extra scale needed so a rotated photo stays inside the stage.
+ *
+ * The photo is already fitted *unrotated*, so a landscape photo turned upright
+ * overflows vertically. There is also no reason to scale a photo *up* once it is
+ * rotated: that would silently zoom on a control the user pressed for
+ * orientation. The factor is therefore capped at 1.
+ *
+ * Both `imageWidth`/`imageHeight` and the viewport must describe the same
+ * coordinate space, so pass the letterboxed photo size and the stage's content
+ * area (padding already subtracted).
+ */
+export function viewerFitScale(metrics: ViewerMetrics): number {
+  const rotated = rotatedSize(metrics.imageWidth, metrics.imageHeight, metrics.rotation)
+  if (!(rotated.width > 0) || !(rotated.height > 0)) return 1
+  if (!(metrics.viewportWidth > 0) || !(metrics.viewportHeight > 0)) return 1
+  return Math.min(1, metrics.viewportWidth / rotated.width, metrics.viewportHeight / rotated.height)
+}
+
+/**
+ * Keep a panned/zoomed/rotated photo reachable and gap-free.
+ *
+ * `x` and `y` are offsets of the photo's centre from the stage's centre, which
+ * is how CSS `transform: translate(...) scale(...) rotate(...)` lays it out.
+ *
+ * Once the photo is larger than the stage on an axis, its edges are kept
+ * outside the stage: you can pan to a corner, never past it, so no blank gap can
+ * ever appear. When it is smaller than the stage on an axis it is centred there
+ * instead, because panning it would only create empty space.
+ */
+export function clampViewerTransform(t: Transform, geometry: ViewerGeometry): Transform {
+  if (!(geometry.viewportWidth > 0) || !(geometry.viewportHeight > 0)) return t
+
+  const scale = clamp(t.scale, geometry.minZoom, geometry.maxZoom)
+  const rotated = rotatedSize(geometry.imageWidth, geometry.imageHeight, geometry.rotation)
+  // Still decoding: there is no box to clamp against yet.
+  if (!(rotated.width > 0) || !(rotated.height > 0)) return { ...t, scale }
+
+  const fit = viewerFitScale(geometry)
+  const boxWidth = rotated.width * fit * scale
+  const boxHeight = rotated.height * fit * scale
+
+  const axis = (value: number, viewport: number, size: number): number => {
+    if (size <= viewport) return 0
+    const slack = (size - viewport) / 2
+    return clamp(value, -slack, slack)
+  }
+
+  return {
+    scale,
+    x: axis(t.x, geometry.viewportWidth, boxWidth),
+    y: axis(t.y, geometry.viewportHeight, boxHeight)
+  }
+}
+
+/**
+ * Zoom to `nextScale` while keeping the stage point under (`pivotX`, `pivotY`)
+ * pinned there.
+ *
+ * Works on centre-offset coordinates: a point at stage position `p` sits at
+ * `p = centre + offset`, so holding it fixed means scaling the offset relative
+ * to the pivot. This is what makes wheel and pinch zoom feel anchored to the
+ * cursor or to the fingers rather than to the middle of the window.
+ */
+export function zoomViewerAbout(
+  t: Transform,
+  nextScale: number,
+  pivotX: number,
+  pivotY: number,
+  minZoom: number,
+  maxZoom: number
+): Transform {
+  const scale = clamp(nextScale, minZoom, maxZoom)
+  if (scale === t.scale || !(t.scale > 0)) return { ...t, scale }
+  const ratio = scale / t.scale
+  return {
+    scale,
+    x: pivotX - (pivotX - t.x) * ratio,
+    y: pivotY - (pivotY - t.y) * ratio
+  }
+}
+
+/** Visible world rectangle for a viewport, used for culling and LOD decisions. */export function visibleWorldRect(
   t: Transform,
   viewportWidth: number,
   viewportHeight: number

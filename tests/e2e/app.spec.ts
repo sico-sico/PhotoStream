@@ -49,7 +49,10 @@ test.beforeAll(async () => {
   photoDir = await mkdtemp(join(tmpdir(), 'photostream-e2e-photos-'))
   userDataDir = await mkdtemp(join(tmpdir(), 'photostream-e2e-data-'))
 
-  await writeJpeg(photoDir, '2019-07-14 Kyoto.jpg', '2019:07:14 08:15:00')
+  // The first photo is deliberately larger than the window: the viewer only
+  // allows panning once the photo overflows the stage, so a small fixture could
+  // never exercise a drag.
+  await writeJpeg(photoDir, '2019-07-14 Kyoto.jpg', '2019:07:14 08:15:00', 2400, 1600)
   await writeJpeg(photoDir, '2020-01-05 Paris.jpg', '2020:01:05 19:30:00')
   await writeJpeg(photoDir, '2024-03-11 Osaka.jpg', '2024:03:11 23:45:00', 200, 300)
 
@@ -244,6 +247,120 @@ test('zooms and pans inside the viewer', async () => {
   // Fit restores the whole photo.
   await page.getByRole('button', { name: 'Fit' }).click()
   expect(await transformOf()).toBe('')
+
+  await page.keyboard.press('Escape')
+  await expect(viewer).toBeHidden()
+})
+
+test('rotates the photo a quarter turn at a time', async () => {
+  await useEnglish()
+  await page.locator('[data-photo-id]').first().click()
+  const viewer = page.getByRole('dialog')
+  await expect(viewer).toBeVisible()
+
+  const image = page.getByTestId('viewer-image')
+  const transformOf = () => image.evaluate((img: HTMLElement) => img.style.transform)
+  const boxOf = () =>
+    image.evaluate((img: HTMLElement) => {
+      const rect = img.getBoundingClientRect()
+      return { width: Math.round(rect.width), height: Math.round(rect.height) }
+    })
+
+  expect(await transformOf()).toBe('')
+  const upright = await boxOf()
+
+  await page.getByRole('button', { name: 'Rotate right' }).click()
+  await expect.poll(transformOf).toContain('rotate(90deg)')
+  await expect(viewer).toContainText('90°')
+
+  // A quarter turn really swaps the axes on screen. The photo already fills the
+  // stage height when upright, so it stays that tall while getting much
+  // narrower: the aspect ratio has to flip from landscape to portrait.
+  await expect.poll(async () => {
+    const turned = await boxOf()
+    return turned.width < upright.width && turned.width < turned.height
+  }).toBe(true)
+
+  // ...and the rotated box must stay inside the stage: a landscape photo turned
+  // upright overflows the height, so it is refitted rather than clipped.
+  const stageBox = (await page.getByTestId('viewer-stage').boundingBox())!
+  const turned = await boxOf()
+  expect(turned.height).toBeLessThanOrEqual(Math.ceil(stageBox.height))
+  expect(turned.width).toBeLessThanOrEqual(Math.ceil(stageBox.width))
+
+  // Four quarter turns come back to upright.
+  await page.getByRole('button', { name: 'Rotate right' }).click()
+  await page.getByRole('button', { name: 'Rotate right' }).click()
+  await page.getByRole('button', { name: 'Rotate right' }).click()
+  expect(await transformOf()).toBe('')
+
+  // And the keyboard reaches the same state from the other direction.
+  await page.keyboard.press('[')
+  await expect.poll(transformOf).toContain('rotate(-90deg)')
+
+  await page.getByRole('button', { name: 'Fit' }).click()
+  expect(await transformOf()).toBe('')
+
+  await page.keyboard.press('Escape')
+  await expect(viewer).toBeHidden()
+})
+
+test('pinches to zoom inside the viewer', async () => {
+  await useEnglish()
+  await page.locator('[data-photo-id]').first().click()
+  const viewer = page.getByRole('dialog')
+  await expect(viewer).toBeVisible()
+
+  const image = page.getByTestId('viewer-image')
+  await expect.poll(async () => image.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0)
+  const scaleOf = () =>
+    image.evaluate((img: HTMLElement) => {
+      const match = /scale\(([\d.]+)\)/.exec(img.style.transform)
+      return match ? Number(match[1]) : 1
+    })
+
+  // Two synthetic pointers cannot be produced with the mouse API, so the
+  // PointerEvents are dispatched directly on the stage. This still exercises the
+  // real React handlers, the pinch maths and the resulting CSS transform.
+  const stageBox = (await page.getByTestId('viewer-stage').boundingBox())!
+  const cx = stageBox.x + stageBox.width / 2
+  const cy = stageBox.y + stageBox.height / 2
+
+  const dispatch = (type: string, pointerId: number, x: number, y: number): void => {
+    page.evaluate(
+      ({ type, pointerId, x, y }) => {
+        const stage = document.querySelector('[data-testid="viewer-stage"]')!
+        stage.dispatchEvent(
+          new PointerEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            pointerId,
+            pointerType: 'touch',
+            button: 0,
+            clientX: x,
+            clientY: y
+          })
+        )
+      },
+      { type, pointerId, x, y }
+    )
+  }
+
+  expect(await scaleOf()).toBe(1)
+
+  await dispatch('pointerdown', 11, cx - 50, cy)
+  await dispatch('pointerdown', 12, cx + 50, cy)
+  // Spread from 100px to 300px apart: a 3x pinch.
+  await dispatch('pointermove', 12, cx + 250, cy)
+
+  await expect.poll(scaleOf).toBeGreaterThan(1)
+  await expect(viewer).toBeVisible()
+
+  await dispatch('pointerup', 12, cx + 250, cy)
+  await dispatch('pointerup', 11, cx - 50, cy)
+
+  // Releasing the fingers must not dismiss the photo.
+  await expect(viewer).toBeVisible()
 
   await page.keyboard.press('Escape')
   await expect(viewer).toBeHidden()

@@ -49,6 +49,8 @@ export const en = {
   'viewer.close': 'Close viewer',
   'viewer.reveal': 'Show in folder',
   'viewer.fit': 'Fit',
+  'viewer.rotateLeft': 'Rotate left',
+  'viewer.rotateRight': 'Rotate right',
   'viewer.noDate': 'no capture date',
   'viewer.size': '{width}×{height}',
 

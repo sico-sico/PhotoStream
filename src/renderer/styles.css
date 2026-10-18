@@ -53,11 +53,18 @@ body {
   -webkit-app-region: drag;
 }
 
+/*
+ * Only real controls opt out of dragging.
+ *
+ * `.dir-label` used to be listed here as well, but it is nothing more than a
+ * text readout and it is `flex: 1 1 auto`, so it covered most of the bar's
+ * width with a non-draggable block. Between that, the buttons and the gaps the
+ * window had almost no grabbable area left and could not be moved at all.
+ */
 .toolbar button,
 .toolbar input,
 .toolbar select,
-.toolbar label,
-.toolbar .dir-label {
+.toolbar label {
   -webkit-app-region: no-drag;
 }
 
@@ -114,6 +121,21 @@ body {
   text-overflow: ellipsis;
   direction: rtl;
   text-align: left;
+  /*
+   * The window's main drag handle: the widest piece of the bar that is not a
+   * control.
+   *
+   * It stays a plain text block on purpose. `direction: rtl` is what makes a
+   * long path truncate from the *start* (keeping the leaf folder visible);
+   * turning it into a flex container flips the inline start to the right edge
+   * and the text jumps across the bar.
+   *
+   * Vertical padding with an equal negative margin grows the grabbable strip to
+   * the full bar height without moving the text or changing the bar's height.
+   */
+  -webkit-app-region: drag;
+  padding: 8px 0;
+  margin: -8px 0;
 }
 
 .layout-switch {
@@ -398,10 +420,19 @@ body {
   cursor: grabbing;
 }
 
+/* Two fingers: the gesture is a pinch, so neither grab nor zoom-out applies. */
+.viewer-stage.pinching,
+.viewer-stage.pinching.dragging {
+  cursor: default;
+}
+
 .viewer-image {
   grid-area: 1 / 1;
-  max-width: 100%;
-  max-height: 100%;
+  /*
+   * The size is set in pixels by the component, from the photo's own ratio and
+   * the measured stage. `max-height: 100%` used to be here but cannot resolve
+   * against a grid item's indefinite height, so the photo overflowed.
+   */
   object-fit: contain;
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
   cursor: default;
