@@ -43,8 +43,10 @@ export function inspectContainer(buffer: Buffer): ContainerInspection {
 
 function inspectJpeg(buffer: Buffer): ContainerInspection {
   let offset = 2
+  /** The first EXIF APP1 seen; the walk continues to learn whether more follows. */
+  let exif: Buffer | undefined
   while (offset + 1 < buffer.length) {
-    if (buffer[offset] !== 0xff) return { format: 'jpeg', complete: false }
+    if (buffer[offset] !== 0xff) return { format: 'jpeg', exif, complete: false }
     const marker = buffer[offset + 1]
     // Any number of 0xFF bytes may pad a marker.
     if (marker === 0xff) {
@@ -54,26 +56,22 @@ function inspectJpeg(buffer: Buffer): ContainerInspection {
     offset += 2
     // Start of scan (and, for a JPEG with no scan at all, end of image): the
     // rest of the file holds no metadata.
-    if (marker === 0xda || marker === 0xd9) return { format: 'jpeg', complete: true }
+    if (marker === 0xda || marker === 0xd9) return { format: 'jpeg', exif, complete: true }
     // Standalone markers have no length field (TEM, RSTn, SOI).
     if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd8)) continue
-    if (offset + 1 >= buffer.length) return { format: 'jpeg', complete: false }
+    if (offset + 1 >= buffer.length) return { format: 'jpeg', exif, complete: false }
     const length = buffer.readUInt16BE(offset)
-    if (length < 2) return { format: 'jpeg', complete: false }
-    if (marker === 0xe1 && length > 2 + EXIF_PREFIX.length) {
+    if (length < 2) return { format: 'jpeg', exif, complete: false }
+    if (!exif && marker === 0xe1 && length > 2 + EXIF_PREFIX.length) {
       const payload = buffer.subarray(offset + 2, offset + length)
       if (payload.toString('latin1', 0, EXIF_PREFIX.length) === EXIF_PREFIX) {
-        return {
-          format: 'jpeg',
-          exif: payload.subarray(EXIF_PREFIX.length),
-          complete: true
-        }
+        exif = payload.subarray(EXIF_PREFIX.length)
       }
     }
     offset += length
-    if (offset > buffer.length) return { format: 'jpeg', complete: false }
+    if (offset > buffer.length) return { format: 'jpeg', exif, complete: false }
   }
-  return { format: 'jpeg', complete: false }
+  return { format: 'jpeg', exif, complete: false }
 }
 
 function inspectPng(buffer: Buffer): ContainerInspection {

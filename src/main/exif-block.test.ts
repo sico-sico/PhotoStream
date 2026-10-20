@@ -93,6 +93,32 @@ describe('inspectContainer: JPEG', () => {
     expect(inspectContainer(jpeg).exif?.toString('latin1')).toBe(TIFF.toString('latin1'))
   })
 
+  it('is incomplete when the window ends after the EXIF block but before the scan', () => {
+    /*
+     * The bug this covers: finding the EXIF block used to end the walk and
+     * report `complete`, so a photo whose date sits in the first 64 KB but whose
+     * frame header sits past it never triggered the larger read — and was filed
+     * with no dimensions at all.
+     *
+     * A real export looks exactly like this: APP1(EXIF), APP13(Photoshop), APP2
+     * (ICC), APP1(XMP), and only then DQT/SOF, which lands past 68 KB here.
+     */
+    const jpeg = Buffer.concat([
+      SOI,
+      app1(TIFF),
+      segment(0xed, Buffer.alloc(40 * 1024, 3)),
+      segment(0xe2, Buffer.alloc(30 * 1024, 5)),
+      segment(0xdb, Buffer.alloc(65, 1)),
+      SOS
+    ])
+
+    const window = inspectContainer(jpeg.subarray(0, 64 * 1024))
+    expect(window.exif?.toString('latin1'), 'the date is already readable').toBe(TIFF.toString('latin1'))
+    expect(window.complete, 'but the frame header may be further down').toBe(false)
+
+    expect(inspectContainer(jpeg).complete).toBe(true)
+  })
+
   it('stops at end of image', () => {
     const jpeg = Buffer.concat([SOI, Buffer.from([0xff, 0xd9])])
     expect(inspectContainer(jpeg).complete).toBe(true)

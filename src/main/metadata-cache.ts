@@ -167,6 +167,24 @@ export class MetadataCache {
         String(SCHEMA_VERSION)
       )
 
+      /*
+       * One-time repair of rows written before the 64 KB-window bug was fixed.
+       *
+       * Those rows hold `width = height = 0` for any photo whose APP segments add
+       * up to more than the first read window, because the scan returned as soon
+       * as it had a date. The wall then laid the photo out as a square. Deleting
+       * them costs one re-read per affected photo and nothing for the rest, which
+       * a schema bump — dropping all 40 000 rows — would not.
+       */
+      const repaired = db.prepare('SELECT value FROM cache_info WHERE key = ?').get('zero_dimension_repair')
+      if (!repaired) {
+        db.exec('DELETE FROM photo_metadata WHERE width <= 0 OR height <= 0')
+        db.prepare('INSERT OR REPLACE INTO cache_info (key, value) VALUES (?, ?)').run(
+          'zero_dimension_repair',
+          '1'
+        )
+      }
+
       this.db = db
       this.getStatement = db.prepare(
         'SELECT width, height, taken_at, orientation, full_exif FROM photo_metadata WHERE path = ? AND mtime_ms = ? AND size_bytes = ?'

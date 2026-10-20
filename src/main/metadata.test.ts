@@ -1,5 +1,13 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { normalizeOrientation, readCaptureDate } from './metadata'
+import {
+  METADATA_FIRST_READ_BYTES,
+  normalizeOrientation,
+  readCaptureDate,
+  readImageMetadata
+} from './metadata'
 
 /**
  * EXIF capture-date parsing.
@@ -108,5 +116,88 @@ describe('normalizeOrientation', () => {
     expect(normalizeOrientation(3.5)).toBe(1)
     expect(normalizeOrientation('4')).toBe(4)
     expect(normalizeOrientation('absurd')).toBe(1)
+  })
+})
+
+describe('readImageMetadata', () => {
+  /** A TIFF whose only tag is `DateTime`, which is enough to count as dated. */
+  function datedTiff(): Buffer {
+    const tiff = Buffer.alloc(46)
+    tiff.write('II', 0, 'latin1')
+    tiff.writeUInt16LE(42, 2)
+    tiff.writeUInt32LE(8, 4)
+    tiff.writeUInt16LE(1, 8) // one entry
+    tiff.writeUInt16LE(0x0132, 10) // DateTime
+    tiff.writeUInt16LE(2, 12) // ASCII
+    tiff.writeUInt32LE(20, 14) // count
+    tiff.writeUInt32LE(26, 18) // offset of the string
+    tiff.writeUInt32LE(0, 22) // no next IFD
+    tiff.write('2026:10:02 12:00:00\0', 26, 'latin1')
+    return tiff
+  }
+
+  function app1(payload: Buffer): Buffer {
+    const body = Buffer.concat([Buffer.from('Exif\0\0', 'latin1'), payload])
+    const header = Buffer.from([0xff, 0xe1, 0x00, 0x00])
+    header.writeUInt16BE(body.length + 2, 2)
+    return Buffer.concat([header, body])
+  }
+
+  function segment(marker: number, payload: Buffer): Buffer {
+    const header = Buffer.from([0xff, marker, 0x00, 0x00])
+    header.writeUInt16BE(payload.length + 2, 2)
+    return Buffer.concat([header, payload])
+  }
+
+  /** A baseline JPEG frame header carrying `width` x `height`. */
+  function sof0(width: number, height: number): Buffer {
+    const payload = Buffer.alloc(15)
+    payload.writeUInt8(8, 0)
+    payload.writeUInt16BE(height, 1)
+    payload.writeUInt16BE(width, 3)
+    payload.writeUInt8(3, 5)
+    for (let i = 0; i < 3; i++) {
+      payload.writeUInt8(i + 1, 6 + i * 3)
+      payload.writeUInt8(0x11, 7 + i * 3)
+      payload.writeUInt8(0, 8 + i * 3)
+    }
+    return segment(0xc0, payload)
+  }
+
+  async function withTempJpeg(bytes: Buffer, run: (path: string) => Promise<void>): Promise<void> {
+    const dir = await mkdtemp(join(tmpdir(), 'photostream-metadata-'))
+    try {
+      const path = join(dir, 'export.jpg')
+      await writeFile(path, bytes)
+      await run(path)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }
+
+  it('reads dimensions from past the first window, not just the date', async () => {
+    /*
+     * A Lightroom export: EXIF, a Photoshop block, an ICC profile, and XMP add
+     * up to ~68 KB, so the frame header sits beyond the 64 KB first read. The
+     * old code stopped at the EXIF block, reported the window as complete, and
+     * filed the photo with width = height = 0 — a square tile showing a 3:2
+     * bitmap, i.e. black bars above and below, and no zoom level to ask for.
+     */
+    const bytes = Buffer.concat([
+      Buffer.from([0xff, 0xd8]),
+      app1(datedTiff()),
+      segment(0xed, Buffer.alloc(40 * 1024, 3)),
+      segment(0xe2, Buffer.alloc(30 * 1024, 5)),
+      sof0(6854, 4569),
+      Buffer.from([0xff, 0xda, 0x00, 0x02, 0xff, 0xd9])
+    ])
+    expect(bytes.length).toBeGreaterThan(METADATA_FIRST_READ_BYTES)
+
+    await withTempJpeg(bytes, async (path) => {
+      const meta = await readImageMetadata(path)
+      expect(meta.takenAt).toBe('2026-10-02')
+      expect(meta.width).toBe(6854)
+      expect(meta.height).toBe(4569)
+    })
   })
 })

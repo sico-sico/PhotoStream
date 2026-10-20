@@ -45,6 +45,47 @@ async function writeJpeg(dir: string, name: string, date: string, width = 320, h
     .toFile(join(dir, name))
 }
 
+/**
+ * Write a 3:2 JPEG whose frame header sits past the 64 KB metadata window.
+ *
+ * Real editors put several APP segments in front of the frame header: EXIF, XMP
+ * and an ICC profile together routinely exceed 64 KB. The scan used to stop as
+ * soon as it saw an EXIF block, keep the date and report no dimensions, and the
+ * wall then drew the photo as a square - a 3:2 rendition letterboxed inside a
+ * square tile, with the tile background showing as bars above and below. One
+ * maximum-size APP2 segment reproduces that geometry without shipping a
+ * multi-megabyte fixture.
+ */
+async function writeJpegWithDistantFrameHeader(
+  dir: string,
+  name: string,
+  date: string,
+  width = 1200,
+  height = 800
+): Promise<void> {
+  const base = await sharp({ create: { width, height, channels: 3, background: { r: 30, g: 120, b: 200 } } })
+    .withExif({ IFD0: { DateTime: date }, IFD3: { DateTimeOriginal: date } })
+    .jpeg()
+    .toBuffer()
+
+  // Splice after the EXIF block, like a camera that writes EXIF, then XMP, then
+  // a profile: the date stays inside the window while the frame header does not.
+  let offset = 2
+  while (offset + 4 <= base.length && base[offset] === 0xff && base[offset + 1] !== 0xe1) {
+    offset += 2 + base.readUInt16BE(offset + 2)
+  }
+  const split = offset + 2 + base.readUInt16BE(offset + 2)
+
+  // The length field counts itself (2 bytes) plus the payload, and a segment
+  // cannot be longer than 65533 payload bytes.
+  const payload = Buffer.alloc(65_531)
+  const segment = Buffer.alloc(payload.length + 4)
+  segment.writeUInt16BE(0xffe2, 0)
+  segment.writeUInt16BE(payload.length + 2, 2)
+
+  await writeFile(join(dir, name), Buffer.concat([base.subarray(0, split), segment, base.subarray(split)]))
+}
+
 test.beforeAll(async () => {
   photoDir = await mkdtemp(join(tmpdir(), 'photostream-e2e-photos-'))
   userDataDir = await mkdtemp(join(tmpdir(), 'photostream-e2e-data-'))
@@ -1616,5 +1657,45 @@ test('shows a transparent PNG on white and dates it from the file', async () => 
     await expect(viewer).toHaveCount(0)
   } finally {
     await rm(pngLibrary, { recursive: true, force: true })
+  }
+})
+
+test('keeps a photo square-shaped only when its metadata says so', async () => {
+  const deepLibrary = await mkdtemp(join(tmpdir(), 'photostream-e2e-deep-metadata-'))
+  try {
+    // 6854x4569 is the shape of the camera file that exposed this: the date was
+    // readable inside the scan window, the dimensions were not.
+    await writeJpegWithDistantFrameHeader(deepLibrary, 'Long profile.jpg', '2023:05:20 12:00:00')
+
+    await useEnglish()
+    await page.locator('.menu-trigger').click()
+    await page.getByRole('checkbox', { name: 'Include photos in subfolders' }).uncheck()
+    await page.keyboard.press('Escape')
+
+    await app.evaluate(async ({ dialog }, dir) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [dir] })
+    }, deepLibrary)
+    await page.locator('.toolbar-open-main').click()
+    await expect(page.locator('.photo-count')).toHaveText('1/1')
+
+    // The date comes from EXIF but the dimensions only exist past the first
+    // 64 KB of APP segments, so the scanner has to keep going instead of
+    // treating the first EXIF block as the end of the metadata.
+    await expect(page.locator('.tile-caption').first()).toHaveText('2023-05-20')
+
+    // Rows fixes one dimension and derives the other, so the tile states the
+    // aspect ratio the scanner found. A square tile here is the bug: it
+    // letterboxes the 3:2 rendition and paints the tile background as bars.
+    await page.getByRole('button', { name: 'Rows' }).click()
+    const tile = page.locator('[data-photo-id]').first()
+    const box = (await tile.boundingBox())!
+    expect(box.width / box.height).toBeCloseTo(1.5, 1)
+
+    const image = tile.locator('img')
+    await expect
+      .poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth / img.naturalHeight))
+      .toBeCloseTo(1.5, 1)
+  } finally {
+    await rm(deepLibrary, { recursive: true, force: true })
   }
 })

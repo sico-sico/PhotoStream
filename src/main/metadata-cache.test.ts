@@ -1,6 +1,7 @@
 import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { MetadataCache } from './metadata-cache'
 
@@ -79,6 +80,37 @@ describe('MetadataCache', () => {
     const undated = { ...sample, takenAt: '' }
     cache.store('/photos/a.jpg', 1000, 5000, undated)
     expect(cache.lookup('/photos/a.jpg', 1000, 5000)?.takenAt).toBe('')
+  })
+
+  it('drops rows written before dimensions were read correctly, once', () => {
+    /*
+     * Photos whose metadata ran past the first read window were stored as
+     * 0 x 0 and laid out as squares. The rows are indistinguishable from a
+     * legitimate "no dimensions" answer, so they are cleared wholesale on the
+     * first start after the fix — and only then, since a second pass would
+     * throw away every genuinely unmeasurable file on each launch.
+     */
+    cache = new MetadataCache(file())
+    cache.store('/photos/zero.jpg', 1, 1, { ...sample, width: 0, height: 0 })
+    cache.store('/photos/good.jpg', 1, 1, sample)
+    cache.close()
+
+    // A database written by the build before the fix: same schema, no marker.
+    const db = new DatabaseSync(file())
+    db.exec("DELETE FROM cache_info WHERE key = 'zero_dimension_repair'")
+    db.close()
+
+    cache = new MetadataCache(file())
+    expect(cache.lookup('/photos/zero.jpg', 1, 1)).toBeUndefined()
+    expect(cache.lookup('/photos/good.jpg', 1, 1)).toEqual(sample)
+
+    cache.store('/photos/zero.jpg', 1, 1, { ...sample, width: 0, height: 0 })
+    cache.close()
+
+    cache = new MetadataCache(file())
+    expect(cache.lookup('/photos/zero.jpg', 1, 1)?.takenAt, 'the repair does not run twice').toBe(
+      '2020-01-01'
+    )
   })
 
   it('forgets photos that are no longer in the folder', () => {

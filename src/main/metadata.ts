@@ -177,6 +177,8 @@ export async function parseImageBuffer(buffer: Buffer): Promise<ImageMetadata> {
     try {
       const sharp = await loadSharp()
       const metadata = await sharp(buffer).metadata()
+      width = metadata.width ?? 0
+      height = metadata.height ?? 0
       orientation = normalizeOrientation(metadata.orientation)
       if (metadata.exif) {
         try {
@@ -203,13 +205,15 @@ export async function parseImageBuffer(buffer: Buffer): Promise<ImageMetadata> {
     }
   }
 
-  try {
-    const size = imageSize(buffer)
-    width = size.width ?? 0
-    height = size.height ?? 0
-  } catch {
-    // Truncated or unusual JPEG: leave the dimensions at 0 and let the UI
-    // fall back to a square placeholder.
+  if (width === 0 || height === 0) {
+    try {
+      const size = imageSize(buffer)
+      width = size.width ?? 0
+      height = size.height ?? 0
+    } catch {
+      // Truncated or unusual JPEG: leave the dimensions at 0 and let the UI
+      // fall back to a square placeholder.
+    }
   }
 
   return { width, height, takenAt, orientation }
@@ -219,12 +223,21 @@ export async function parseImageBuffer(buffer: Buffer): Promise<ImageMetadata> {
 export async function readImageMetadata(path: string): Promise<ImageMetadata> {
   const first = await readPrefix(path, METADATA_FIRST_READ_BYTES)
   const meta = await parseImageBuffer(first)
-  // Three ways to be done with one read: a date was found, the file is smaller
-  // than the window, or the window already passed the end of the metadata area
-  // (see `metadataRegionComplete`). Otherwise the segment may sit beyond 64 KB —
-  // a large ICC profile pushes it there — and one more read settles it.
-  if (meta.takenAt || first.length < METADATA_FIRST_READ_BYTES) return meta
+  // A short read means the file itself fits in the window: there is nothing
+  // further to look at.
+  if (first.length < METADATA_FIRST_READ_BYTES) return meta
+  // Done when both answers are in hand, or when the window provably reached the
+  // end of the metadata area (see `metadataRegionComplete`).
+  //
+  // Dimensions are part of the condition, not just the date. A file whose APP
+  // segments add up to more than 64 KB — a camera JPEG with a large XMP block
+  // and an ICC profile puts its frame header past 68 KB — yields a date but no
+  // width or height from the first window, and returning here would file it as
+  // a square photo: the tile then letterboxes the real 3:2 bitmap, which reads
+  // as black bars above and below the picture.
+  if (meta.takenAt && meta.width > 0 && meta.height > 0) return meta
   if (metadataRegionComplete(first)) return meta
+
   const full = await readPrefix(path, METADATA_PREFIX_BYTES)
   return parseImageBuffer(full)
 }
