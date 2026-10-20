@@ -1460,15 +1460,18 @@ body {
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
   cursor: default;
   /*
-   * Opaque backdrop, for the one tier that can still carry alpha.
+   * No background here, deliberately.
    *
-   * Generated renditions are flattened onto white before they are written, but
-   * the `full` tier streams the original file — so a PNG shows its transparency
-   * here. Painting white behind it matches what the wall shows and keeps the
-   * photo legible against the dark overlay. Invisible for JPEG, which covers
-   * the box completely.
+   * `object-fit: contain` letterboxes the bitmap inside the element box. The box
+   * follows the bitmap's own ratio, but both dimensions are snapped to the
+   * device-pixel grid, so a fraction of a pixel can still be left over on one
+   * edge — and an opaque background turns that sliver into a visible hairline
+   * whose side changes with the photo. Leaving the element transparent makes the
+   * leftover show the stage instead, which is invisible.
+   *
+   * Transparency that is *part of the picture* is the one case that still needs
+   * a backdrop; see `.viewer-image.alpha` below.
    */
-  background: #fff;
   /*
    * No `will-change: transform` here, deliberately.
    *
@@ -1483,6 +1486,19 @@ body {
    * below), where the motion hides the resampling, and dropped at rest so the
    * photo is painted through the image pipeline at full sharpness.
    */
+}
+
+/*
+ * Opaque backdrop, only where the bitmap can actually be transparent.
+ *
+ * Generated renditions are flattened onto white before they are written, but the
+ * `full` tier streams the original file — so a PNG shows its transparency
+ * against the dark stage. The viewer marks only such files with `.alpha`, so
+ * every JPEG stays free of the element background that made a sub-pixel
+ * letterbox visible.
+ */
+.viewer-image.alpha {
+  background: #fff;
 }
 
 /*

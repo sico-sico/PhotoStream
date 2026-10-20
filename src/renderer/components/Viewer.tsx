@@ -137,6 +137,22 @@ export function Viewer({
   const [content, setContent] = useState({ width: 0, height: 0 })
   /** The photo's intrinsic size, known once it decodes. */
   const [natural, setNatural] = useState({ width: 0, height: 0 })
+  /**
+   * Intrinsic size of the bitmap currently on screen.
+   *
+   * Deliberately separate from `natural`, which comes from the scan and is what
+   * the 1:1 ceiling is computed against. The *box* has to follow the bitmap
+   * instead: a rendition is rounded to whole pixels, so 6000x4000 becomes
+   * 1792x1191 — a ratio of 1.5046 rather than 1.5 — and `object-fit: contain`
+   * turns that fraction into a hairline band on one edge, whose side depends on
+   * which dimension rounded down. It is a pixel or less, but on a white element
+   * background it is plainly visible against the dark stage.
+   *
+   * It also covers a photo whose EXIF orientation swaps its axes: the scan
+   * records the stored pixel dimensions, while `sharp` bakes the rotation in, so
+   * the bitmap can be the transpose of what the scan reported.
+   */
+  const [bitmap, setBitmap] = useState({ width: 0, height: 0 })
   const drag = useRef<{ pointerId: number; lastX: number; lastY: number; moved: boolean } | null>(null)
   /** Live pointers, keyed by id, in stage-local centre-offset coordinates. */
   const pointers = useRef(new Map<number, PinchPoint>())
@@ -160,12 +176,19 @@ export function Viewer({
     typeof window.devicePixelRatio === 'number' && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1
 
   /**
-   * The photo's on-screen size at fit, derived from its intrinsic ratio.
+   * The photo's on-screen size at fit, derived from the bitmap's own ratio.
    *
    * This is set explicitly on the `<img>` rather than left to `object-fit`,
    * because `max-height: 100%` cannot resolve against a grid item whose height
    * is not definite: the element ended up 1552x1035 in a 1552x920 stage and the
    * photo overflowed, which made every pan bound wrong.
+   *
+   * The ratio comes from the bitmap once it has loaded, falling back to the
+   * scan's dimensions for the first frame. The scan is authoritative for the
+   * source pixel count, but not for the *shape of what is painted*: renditions
+   * are rounded to whole pixels, and a rotated original is transposed relative to
+   * the stored dimensions. Sizing the box from the scan therefore leaves a
+   * sub-pixel band of the element's background along one edge.
    *
    * Rounded onto the device-pixel grid: at 150% display scaling a fitted size
    * like 1227.385 CSS px is 1841.078 device pixels, and the 0.078 makes
@@ -173,12 +196,14 @@ export function Viewer({
    * `snapToDevicePixel`.
    */
   const fitted = useMemo(() => {
-    const size = containSize(natural.width, natural.height, content.width, content.height)
+    const width = bitmap.width > 0 ? bitmap.width : natural.width
+    const height = bitmap.height > 0 ? bitmap.height : natural.height
+    const size = containSize(width, height, content.width, content.height)
     return {
       width: snapToDevicePixel(size.width, dpr),
       height: snapToDevicePixel(size.height, dpr)
     }
-  }, [content.height, content.width, dpr, natural.height, natural.width])
+  }, [bitmap.height, bitmap.width, content.height, content.width, dpr, natural.height, natural.width])
 
   // The scan already parsed every photo's dimensions, so `natural` can come from
   // the photo rather than waiting for the image to decode. That keeps `fitted`
@@ -191,6 +216,8 @@ export function Viewer({
         ? { width: photo.width, height: photo.height }
         : { width: 0, height: 0 }
     )
+    // The previous photo's bitmap shape must not size this one's box.
+    setBitmap({ width: 0, height: 0 })
     setFullLoaded(false)
     setFullFailed(false)
     setForceFull(false)
@@ -645,6 +672,18 @@ export function Viewer({
   const sizeStyle =
     painted.width > 0 ? { width: `${painted.width}px`, height: `${painted.height}px` } : undefined
 
+  /**
+   * Whether the original may carry transparency.
+   *
+   * Generated renditions are flattened onto white before they are written, so
+   * only the `full` tier can still have an alpha channel — and only for a format
+   * that supports one. JPEG never does; anything else this app accepts (PNG)
+   * might. The allow-list is inverted on purpose: an unknown future format gets
+   * the white backdrop, which is visible, rather than none, which would render
+   * its transparent areas as the dark stage.
+   */
+  const mayHaveAlpha = !/\.jpe?g$/i.test(photo.name)
+
   return (
     <div className="viewer" role="dialog" aria-modal="true" aria-label={photo.name} data-testid="viewer">
       {/*
@@ -675,7 +714,7 @@ export function Viewer({
             />
           ) : null}
           <img
-            className={`viewer-image ${fullLoaded ? 'ready' : ''}`}
+            className={`viewer-image ${fullLoaded ? 'ready' : ''} ${mayHaveAlpha ? 'alpha' : ''}`}
             data-testid="viewer-image"
             src={rendition && rendition.photoId === photo.id ? rendition.url : undefined}
             alt={photo.name}
@@ -685,11 +724,19 @@ export function Viewer({
             onLoad={(event) => {
               setFullLoaded(true)
               setFullFailed(false)
+              const image = event.currentTarget
+              // The shape actually on screen, which is what the box has to
+              // match. See `bitmap`.
+              setBitmap((previous) =>
+                previous.width === image.naturalWidth && previous.height === image.naturalHeight
+                  ? previous
+                  : { width: image.naturalWidth, height: image.naturalHeight }
+              )
               // Fallback when the scan could not read the source dimensions.
               setNatural((prev) =>
                 prev.width > 0
                   ? prev
-                  : { width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight }
+                  : { width: image.naturalWidth, height: image.naturalHeight }
               )
             }}
             onError={() => {

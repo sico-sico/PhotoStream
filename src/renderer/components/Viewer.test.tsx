@@ -196,6 +196,21 @@ describe('Viewer', () => {
     expect(full.className).toContain('ready')
   })
 
+  it('marks only formats that can be transparent for a white backdrop', async () => {
+    // Generated renditions are flattened, but the `full` tier streams the
+    // original, so a PNG needs white behind it. A JPEG must not get one: that
+    // background is what turned a sub-pixel letterbox into a visible line.
+    renderViewer()
+    await waitFor(() =>
+      expect(screen.getByTestId('viewer-image')).toHaveAttribute('src', 'pic://thumb/kyoto-zoom.webp')
+    )
+    expect(screen.getByTestId('viewer-image').className).not.toContain('alpha')
+
+    renderViewer({ photo: { ...photo, id: 'p2', name: 'sticker.png' } })
+    const png = screen.getAllByTestId('viewer-image').at(-1)!
+    expect(png.className).toContain('alpha')
+  })
+
   it('closes on Escape, steps on arrow keys', async () => {
     const user = userEvent.setup()
     const onClose = vi.fn()
@@ -683,6 +698,42 @@ describe('Viewer', () => {
         image.dispatchEvent(new Event('load'))
       })
     }
+
+    it('sizes the box from the bitmap rather than from the scan', async () => {
+      /*
+       * The bug this covers: the element box was derived from the scan's
+       * 3000x2000, but the rendition is 1792x1191 — the encoder rounds each
+       * side, so its ratio is 1.5046, not 1.5. `object-fit: contain` then leaves
+       * a fraction of a pixel on one edge, which showed up as a white hairline
+       * whose side depended on which dimension rounded down.
+       */
+      renderViewer({ photo: { ...photo, width: 3000, height: 2000 } })
+      const full = screen.getByTestId('viewer-image') as HTMLImageElement
+      // The measured stage promotes the request to a display-sized rendition.
+      await waitFor(() => expect(full.getAttribute('src')).toMatch(/^pic:\/\/thumb\//))
+
+      // Before decode the scan is all there is: 3:2 into 1000x800 fits by width.
+      expect(parseFloat(full.style.height)).toBe(667)
+
+      Object.defineProperty(full, 'naturalWidth', { configurable: true, value: 1792 })
+      Object.defineProperty(full, 'naturalHeight', { configurable: true, value: 1191 })
+      act(() => full.dispatchEvent(new Event('load')))
+
+      // Now the box follows 1792:1191: 1000 / 1.5046 = 664.62, snapped to 665.
+      expect(parseFloat(full.style.height)).toBe(665)
+
+      // What is left is only the device-pixel rounding of the box itself. Before
+      // this change the same photo had 2.4px of letterbox on one edge.
+      const leftover = (boxWidth: number, boxHeight: number): number => {
+        const ratio = Math.min(boxWidth / 1792, boxHeight / 1191)
+        return Math.max(boxWidth - 1792 * ratio, boxHeight - 1191 * ratio)
+      }
+      const boxWidth = parseFloat(full.style.width)
+      const boxHeight = parseFloat(full.style.height)
+      expect(leftover(boxWidth, boxHeight)).toBeLessThan(1)
+      // And it is a real improvement over sizing from the scan's 3:2.
+      expect(leftover(1000, 667)).toBeGreaterThan(2)
+    })
   })
 
   it('wires the toolbar buttons', async () => {
@@ -931,6 +982,19 @@ describe('viewer rendering', () => {
     for (const selector of ['.viewer-stage.dragging .viewer-image', '.viewer-stage.zooming .viewer-image']) {
       expect(cssRule(selector)).toMatch(/will-change:\s*transform/)
     }
+  })
+
+  it('keeps the photo element transparent so a sub-pixel letterbox cannot show', () => {
+    // `object-fit: contain` can leave a fraction of a pixel on one edge. With an
+    // opaque element background that sliver reads as a white hairline whose side
+    // changes from photo to photo.
+    expect(cssRule('.viewer-image')).not.toMatch(/background/)
+  })
+
+  it('gives a transparent original a white backdrop', () => {
+    // The one case that needs it: the `full` tier streams the original, so a PNG
+    // would otherwise show the dark stage through its transparent areas.
+    expect(cssRule('.viewer-image.alpha')).toMatch(/background:\s*#fff/)
   })
 })
 

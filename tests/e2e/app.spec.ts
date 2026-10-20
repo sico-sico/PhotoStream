@@ -1582,6 +1582,16 @@ test('shows a transparent PNG on white and dates it from the file', async () => 
     const viewer = page.locator('[data-testid="viewer"]')
     await expect(viewer).toContainText('(file date)')
 
+    // A PNG is the one format that gets a white backdrop in the viewer: the
+    // `full` tier streams the original, transparency and all, so without it the
+    // transparent areas would show the dark stage. JPEGs must not get one — it
+    // would turn a sub-pixel letterbox into a visible white line.
+    const viewerImage = page.getByTestId('viewer-image')
+    await expect(viewerImage).toHaveClass(/alpha/)
+    expect(await viewerImage.evaluate((img) => getComputedStyle(img).backgroundColor)).toBe(
+      'rgb(255, 255, 255)'
+    )
+
     // The wall's rendition is flattened onto white, so the transparent half must
     // not carry an alpha channel any more. The cache is shared with every other
     // fixture, so the exact file is located through the URL the tile is showing
