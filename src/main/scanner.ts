@@ -34,10 +34,31 @@ export function photoId(path: string): string {
 /**
  * Files read in parallel during a scan.
  *
- * A file read is one `open` that costs ~85 µs however many bytes it returns, so
- * the scan is bound by how many reads are in flight, not by bytes. Measured on a
- * cold 40 000-photo folder: 8 workers 4592 ms, 16 workers 3976 ms, 32 workers
- * 3961 ms. Past 16 the queue is saturated and more workers only add contention.
+ * A file read is one `open`/`read`/`close` that costs 90–210 µs however many
+ * bytes it returns, and most of that is waiting (kernel + the virus scanner's
+ * filter driver) rather than computing. Throughput therefore scales with how many
+ * reads are outstanding, until queueing stops helping.
+ *
+ * Measured over 4 000 photos, five runs per point, repeatable by pinning the
+ * process's CPU affinity (`(Get-Process -Id $PID).ProcessorAffinity = 0xF`) and
+ * sweeping `concurrency`; worker-thread timing confirmed the limit took effect.
+ *
+ *     logical CPUs  concurrency at the knee   best
+ *     2             32 (still improving)      93 ms
+ *     4             8                          72 ms
+ *     8             6–8                        47 ms
+ *     16            6–8                        37 ms
+ *
+ * Two things worth knowing, both of which contradict a plausible guess. The knee
+ * is **not** the core count: it sits at 6–8 whether 8 or 16 logical CPUs are
+ * available, and on a 2-core machine more concurrency keeps helping, because the
+ * work is mostly waiting. And past the knee there is no penalty — 16 → 64 moves
+ * the total by under 6%, and event-loop lag (which is what the main process's IPC
+ * would feel) stays at 10 ms p95 throughout.
+ *
+ * So 16 rather than 8 is insurance, not a measurement: it costs nothing on a
+ * local SSD and has headroom on a network share or a sleeping disk, where each
+ * outstanding read is worth more.
  */
 const SCAN_CONCURRENCY = 16
 
