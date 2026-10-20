@@ -37,6 +37,24 @@ export interface ScanResult {
 }
 
 /**
+ * A folder's previous contents, from the metadata cache.
+ *
+ * Sent once per open, before the scan finishes: it is the wall as it was last
+ * time, so a known folder can be painted immediately instead of waiting for
+ * every file to be `stat`ed. `dir` is the string the caller asked for (not the
+ * resolved path), so the renderer can discard a snapshot that belongs to a
+ * folder it has already left.
+ *
+ * Deliberately a *snapshot*, not progress: the wall's layout is derived from
+ * the whole photo set, so growing it incrementally re-lays out and re-anchors
+ * the view on every batch (see docs/architecture.md).
+ */
+export interface ScanSeed {
+  dir: string
+  photos: Photo[]
+}
+
+/**
  * Result of opening a path the user handed to the app.
  *
  * `photo` is the absolute path to focus, or `''` when a whole folder was opened.

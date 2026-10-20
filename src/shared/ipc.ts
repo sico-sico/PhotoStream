@@ -9,6 +9,7 @@ export const IPC = {
   settingsLoad: 'settings:load',
   settingsSave: 'settings:save',
   cacheStats: 'cache:stats',
+  scanSeed: 'photos:scanSeed',
   thumbUrl: 'thumb:url',
   thumbUrls: 'thumb:urls',
   thumbReady: 'thumb:ready',

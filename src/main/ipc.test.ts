@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtemp, rm, writeFile, unlink } from 'node:fs/promises'
+﻿import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { mkdtemp, rm, writeFile, unlink, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import sharp from 'sharp'
 import { IPC } from '../shared/ipc'
+import type { Photo } from '../shared/types'
 
 /**
  * `ipc.ts` imports `electron` for `dialog`/`shell`/`ipcMain`. Only
@@ -17,11 +18,13 @@ vi.mock('electron', () => ({
 }))
 
 const { PhotoLibrary } = await import('./ipc')
+const { MetadataCache } = await import('./metadata-cache')
 
 let photoDir = ''
 let cacheDir = ''
 let notices: Array<{ channel: string; payload: unknown }> = []
 let library: InstanceType<typeof PhotoLibrary>
+let metadataCache: InstanceType<typeof MetadataCache>
 
 async function writeJpeg(name: string, exifDate?: string): Promise<void> {
   let image = sharp({
@@ -35,7 +38,10 @@ beforeEach(async () => {
   photoDir = await mkdtemp(join(tmpdir(), 'photostream-lib-'))
   cacheDir = await mkdtemp(join(tmpdir(), 'photostream-libcache-'))
   notices = []
-  library = new PhotoLibrary(cacheDir, (channel, payload) => notices.push({ channel, payload }))
+  // A real database: `cachedPhotos` reads through it, and the scan writes to it,
+  // so the two have to agree on paths and separators.
+  metadataCache = new MetadataCache(join(cacheDir, 'metadata.db'))
+  library = new PhotoLibrary(cacheDir, (channel, payload) => notices.push({ channel, payload }), metadataCache)
 })
 
 afterEach(async () => {
@@ -43,6 +49,7 @@ afterEach(async () => {
   // `warmThumbnails` queues work on the library; let it drain before removing
   // the source directory, otherwise a running encode keeps a file locked.
   await library.drain()
+  metadataCache.close()
   await rm(photoDir, { recursive: true, force: true })
   await rm(cacheDir, { recursive: true, force: true })
 })
@@ -129,6 +136,189 @@ describe('PhotoLibrary', () => {
     const second = await library.thumbUrlFor(library.all[0], 'wall')
     expect(second).toBe(first)
   })
+
+  describe('prefetching the folder the renderer is about to open', () => {
+    it('adopts the scan instead of reading the folder twice', async () => {
+      await writeJpeg('a.jpg', '2020:01:01 10:00:00')
+      await writeJpeg('b.jpg', '2021:06:15 10:00:00')
+
+      library.prefetch(photoDir)
+      // Give the speculative scan a chance to finish before the renderer asks;
+      // adoption must work whether it finished or is still running.
+      await new Promise((resolve) => setTimeout(resolve, 100))
+
+      const result = await library.open(photoDir)
+      expect(result.photos).toHaveLength(2)
+      expect(library.directory).toBe(photoDir)
+      expect(library.scanSignals).toHaveLength(1)
+    })
+
+    it('adopts a prefetch that is still running', async () => {
+      for (let index = 0; index < 6; index++) await writeJpeg(`p${index}.jpg`, '2020:01:01 10:00:00')
+
+      library.prefetch(photoDir)
+      const result = await library.open(photoDir)
+
+      expect(result.photos).toHaveLength(6)
+      expect(library.scanSignals).toHaveLength(1)
+    })
+
+    it('abandons the prefetch when another folder is opened', async () => {
+      await writeJpeg('a.jpg', '2020:01:01 10:00:00')
+      const other = await mkdtemp(join(tmpdir(), 'photostream-prefetch-'))
+      try {
+        await sharp({ create: { width: 10, height: 10, channels: 3, background: { r: 0, g: 0, b: 0 } } })
+          .jpeg()
+          .toFile(join(other, 'only.jpg'))
+
+        library.prefetch(photoDir)
+        await library.open(other)
+
+        expect(library.scanSignals[0].aborted).toBe(true)
+        expect(library.directory).toBe(other)
+        expect(library.all.map((photo) => photo.name)).toEqual(['only.jpg'])
+      } finally {
+        library.close()
+        await library.drain()
+        await rm(other, { recursive: true, force: true })
+      }
+    })
+
+    it('does not adopt a prefetch made with the other recursion setting', async () => {
+      await writeJpeg('a.jpg', '2020:01:01 10:00:00')
+
+      library.prefetch(photoDir, { recursive: false })
+      await library.open(photoDir, { recursive: true })
+
+      // Two scans: the mismatch is abandoned rather than reused for a mode it
+      // was not made for.
+      expect(library.scanSignals).toHaveLength(2)
+      expect(library.all).toHaveLength(1)
+    })
+  })
+
+  describe('cached photos', () => {
+    it('describes a folder from the metadata cache without reading it', async () => {
+      // The wall can be painted from this before the scan finishes; it is a
+      // placeholder, so the shape has to match what a scan produces exactly.
+      await writeJpeg('a.jpg', '2020:01:01 10:00:00')
+      await library.open(photoDir)
+
+      const cached = library.cachedPhotos(photoDir, false)
+      expect(cached.map((photo) => photo.name)).toEqual(['a.jpg'])
+      expect(cached[0].takenAt).toBe('2020-01-01')
+      expect(cached[0].width).toBe(60)
+      expect(cached[0].path).toBe(join(photoDir, 'a.jpg'))
+      expect(cached[0].id).toBe(join(photoDir, 'a.jpg').toLowerCase())
+    })
+
+    it('honours the recursion setting', async () => {
+      await writeJpeg('top.jpg', '2020:01:01 10:00:00')
+      await mkdir(join(photoDir, 'inner'), { recursive: true })
+      await sharp({ create: { width: 20, height: 20, channels: 3, background: { r: 1, g: 2, b: 3 } } })
+        .jpeg()
+        .toFile(join(photoDir, 'inner', 'nested.jpg'))
+      await library.open(photoDir, { recursive: true })
+
+      expect(library.cachedPhotos(photoDir, true).map((photo) => photo.name).sort()).toEqual([
+        'inner/nested.jpg',
+        'top.jpg'
+      ])
+      // A non-recursive view of the same folder hides the subfolder's photo,
+      // exactly as the scanner would.
+      expect(library.cachedPhotos(photoDir, false).map((photo) => photo.name)).toEqual(['top.jpg'])
+    })
+
+    it('returns nothing for a folder that was never scanned', async () => {
+      const other = await mkdtemp(join(tmpdir(), 'photostream-never-'))
+      try {
+        expect(library.cachedPhotos(other, false)).toEqual([])
+      } finally {
+        await rm(other, { recursive: true, force: true })
+      }
+    })
+
+    it('opens with the cached photos reported as one snapshot', async () => {
+      // The snapshot is what lets the wall paint before the disk has been
+      // walked. It is a single message: the renderer re-lays out its whole
+      // photo set on every change, so piecewise delivery would flicker.
+      await writeJpeg('a.jpg', '2020:01:01 10:00:00')
+      await library.open(photoDir)
+      notices.length = 0
+
+      await library.open(photoDir)
+      const seeds = notices.filter((notice) => notice.channel === IPC.scanSeed)
+      expect(seeds).toHaveLength(1)
+      expect((seeds[0].payload as { dir: string }).dir).toBe(photoDir)
+      expect((seeds[0].payload as { photos: Photo[] }).photos.map((photo) => photo.name)).toEqual(['a.jpg'])
+    })
+
+    it('does not report a seed for a folder with nothing cached', async () => {
+      const fresh = await mkdtemp(join(tmpdir(), 'photostream-uncached-'))
+      try {
+        await sharp({ create: { width: 10, height: 10, channels: 3, background: { r: 0, g: 0, b: 0 } } })
+          .jpeg()
+          .toFile(join(fresh, 'new.jpg'))
+        await library.open(fresh)
+        expect(notices.filter((notice) => notice.channel === IPC.scanSeed)).toEqual([])
+      } finally {
+        await rm(fresh, { recursive: true, force: true })
+      }
+    })
+
+    it('still seeds the wall when it adopts a prefetch that is still running', async () => {
+      // The startup path: the prefetch began before the renderer was listening,
+      // so its result is still a couple of hundred milliseconds away and the
+      // cache can paint the wall in the meantime.
+      await writeJpeg('a.jpg', '2020:01:01 10:00:00')
+      await library.open(photoDir)
+      notices.length = 0
+
+      library.prefetch(photoDir)
+      const result = await library.open(photoDir)
+      expect(result.photos).toHaveLength(1)
+      const seed = notices.find((notice) => notice.channel === IPC.scanSeed)
+      expect(seed).toBeDefined()
+      expect((seed!.payload as { dir: string }).dir).toBe(photoDir)
+    })
+
+    it('announces the snapshot under the string the drop used', async () => {
+      // A dropped photo asks with a file path but opens its folder; the
+      // renderer keys the seed on what it sent, so the two have to agree or the
+      // wall stays blank until the scan finishes.
+      await writeJpeg('a.jpg', '2020:01:01 10:00:00')
+      await library.open(photoDir)
+      notices.length = 0
+
+      const photo = join(photoDir, 'a.jpg')
+      await library.open(photoDir, { announceAs: photo })
+      const seed = notices.find((notice) => notice.channel === IPC.scanSeed)
+      expect(seed).toBeDefined()
+      expect((seed!.payload as { dir: string }).dir).toBe(photo)
+    })
+
+    it('does not re-send the cache once the prefetch has finished', async () => {
+      // Its answer is already in flight; a seed would only be a stale copy.
+      await writeJpeg('a.jpg', '2020:01:01 10:00:00')
+      library.prefetch(photoDir)
+      // The scan writes the cache row as it parses; once it is there, the
+      // speculative scan has finished.
+      await waitFor(() => metadataCache.list(photoDir).length === 1)
+      notices.length = 0
+
+      await library.open(photoDir)
+      expect(notices.filter((notice) => notice.channel === IPC.scanSeed)).toEqual([])
+    })
+  })
+
+  /** Poll until `predicate` holds; asynchronous work settles in later ticks. */
+  async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
+    const started = Date.now()
+    while (!predicate()) {
+      if (Date.now() - started > timeoutMs) throw new Error('timed out waiting for condition')
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+  }
 
   describe('watching', () => {
     /** Poll until `predicate` holds; watcher events are asynchronous. */

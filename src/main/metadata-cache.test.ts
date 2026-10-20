@@ -236,4 +236,108 @@ describe('MetadataCache', () => {
       expect(cache.lookup('/photos/a.jpg', 1, 1)).toBeUndefined()
     })
   })
+
+  describe('list', () => {
+    it('returns the rows of one folder, filesystem untouched', () => {
+      cache = new MetadataCache(file())
+      cache.store('/photos/a.jpg', 1000, 5000, sample)
+      cache.store('/photos/b.jpg', 2000, 6000, { ...sample, takenAt: '2021-02-03' })
+
+      expect(cache.list('/photos')).toEqual([
+        { path: '/photos/a.jpg', mtimeMs: 1000, sizeBytes: 5000, width: 2400, height: 1600, takenAt: '2020-01-01', orientation: 1 },
+        { path: '/photos/b.jpg', mtimeMs: 2000, sizeBytes: 6000, width: 2400, height: 1600, takenAt: '2021-02-03', orientation: 1 }
+      ])
+    })
+
+    it('covers subfolders but not a sibling with a shared prefix', () => {
+      // The prefix has to end at a separator, or `/photos2` would be scanned as
+      // part of `/photos`.
+      cache = new MetadataCache(file())
+      cache.store('/photos/a.jpg', 1, 1, sample)
+      cache.store('/photos/2024/b.jpg', 1, 1, sample)
+      cache.store('/photos2/c.jpg', 1, 1, sample)
+
+      expect(cache.list('/photos').map((row) => row.path)).toEqual(['/photos/2024/b.jpg', '/photos/a.jpg'])
+    })
+
+    it('handles Windows paths and a trailing separator', () => {
+      // The production database holds Windows paths; tests use `/`. Both have to
+      // resolve to the same subtree walk.
+      cache = new MetadataCache(file())
+      cache.store('D:\\Photos\\a.jpg', 1, 1, sample)
+      cache.store('D:\\Photos\\2024\\b.jpg', 1, 1, sample)
+      cache.store('D:\\Photos2\\c.jpg', 1, 1, sample)
+
+      expect(cache.list('D:\\Photos\\').map((row) => row.path)).toEqual([
+        'D:\\Photos\\2024\\b.jpg',
+        'D:\\Photos\\a.jpg'
+      ])
+    })
+
+    it('returns nothing for a folder it has never seen', () => {
+      cache = new MetadataCache(file())
+      cache.store('/photos/a.jpg', 1, 1, sample)
+      expect(cache.list('/elsewhere')).toEqual([])
+    })
+  })
+
+  describe('storeMany', () => {
+    it('writes every row in one go', () => {
+      cache = new MetadataCache(file())
+      cache.storeMany([
+        { path: '/photos/a.jpg', mtimeMs: 1000, sizeBytes: 5000, ...sample },
+        { path: '/photos/b.jpg', mtimeMs: 2000, sizeBytes: 6000, ...sample, takenAt: '2021-02-03' }
+      ])
+
+      expect(cache.lookup('/photos/a.jpg', 1000, 5000)).toEqual(sample)
+      expect(cache.lookup('/photos/b.jpg', 2000, 6000)?.takenAt).toBe('2021-02-03')
+    })
+
+    it('replaces the row of a re-exported file', () => {
+      cache = new MetadataCache(file())
+      cache.store('/photos/a.jpg', 1000, 5000, sample)
+      cache.storeMany([{ path: '/photos/a.jpg', mtimeMs: 2000, sizeBytes: 6000, ...sample }])
+
+      expect(cache.lookup('/photos/a.jpg', 1000, 5000)).toBeUndefined()
+      expect(cache.lookup('/photos/a.jpg', 2000, 6000)).toEqual(sample)
+    })
+
+    it('accepts an empty batch', () => {
+      cache = new MetadataCache(file())
+      expect(() => cache!.storeMany([])).not.toThrow()
+      expect(cache.list('/photos')).toEqual([])
+    })
+  })
+
+  describe('snapshot', () => {
+    it('answers by path, and only for the version it read', () => {
+      cache = new MetadataCache(file())
+      cache.store('/photos/a.jpg', 1000, 5000, sample)
+
+      const snapshot = cache.snapshot('/photos')
+      expect(snapshot.get('/photos/a.jpg', 1000, 5000)).toEqual(sample)
+      // The same rules as `lookup`: a changed file is a miss.
+      expect(snapshot.get('/photos/a.jpg', 2000, 5000)).toBeUndefined()
+      expect(snapshot.get('/photos/a.jpg', 1000, 6000)).toBeUndefined()
+      expect(snapshot.get('/photos/b.jpg', 1000, 5000)).toBeUndefined()
+    })
+
+    it('exposes the rows it read, so the wall can paint from them', () => {
+      cache = new MetadataCache(file())
+      cache.store('/photos/a.jpg', 1000, 5000, sample)
+      cache.store('/photos/2024/b.jpg', 2000, 6000, sample)
+
+      expect(cache.snapshot('/photos').rows.map((row) => row.path)).toEqual([
+        '/photos/2024/b.jpg',
+        '/photos/a.jpg'
+      ])
+    })
+
+    it('is empty for a folder with nothing cached', () => {
+      cache = new MetadataCache(file())
+      const snapshot = cache.snapshot('/photos')
+      expect(snapshot.rows).toEqual([])
+      expect(snapshot.get('/photos/a.jpg', 1, 1)).toBeUndefined()
+    })
+  })
 })

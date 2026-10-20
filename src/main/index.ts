@@ -135,7 +135,22 @@ app.whenReady().then(async () => {
     systemLocales: app.getPreferredSystemLanguages()
   })
 
-  await createWindow(dataDir, thumbCacheDir)
+  // A photo handed over on the command line ("Open with → PhotoStream") has to
+  // wait for the renderer to be ready, or the IPC message lands before anything
+  // is listening. Reading the argument is cheap; the hand-off happens below.
+  const launchPhoto = photoFromArgv(process.argv)
+
+  // Window first (that call does not block on the page loading), then the scan
+  // the renderer is about to ask for: it runs while the page is still loading
+  // and React is mounting. `open()` adopts it, so the folder is read once.
+  //
+  // Skipped when a photo was handed over on the command line — that opens the
+  // photo's own folder, for which this scan would be abandoned immediately.
+  const windowReady = createWindow(dataDir, thumbCacheDir)
+  if (settings.lastDir && !launchPhoto) {
+    library.prefetch(settings.lastDir, { recursive: settings.recursive })
+  }
+  await windowReady
 
   /*
    * Housekeeping runs after the window is up, never before: it walks the whole
@@ -149,10 +164,8 @@ app.whenReady().then(async () => {
     void thumbCache.sweep({ force: true }).catch(() => undefined)
   }, CACHE_SWEEP_DELAY_MS)
 
-  // A photo handed over on the command line ("Open with → PhotoStream") has to
-  // wait for the renderer to be ready, or the IPC message lands before anything
-  // is listening. `createWindow` resolves once the page has loaded.
-  const launchPhoto = photoFromArgv(process.argv)
+  // The renderer is listening only now, which is why the hand-off waits for the
+  // page: the IPC message would otherwise land before anything receives it.
   if (launchPhoto) void openExternalPhoto(launchPhoto)
 
   app.on('activate', () => {

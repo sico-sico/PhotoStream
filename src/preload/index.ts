@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { AppInfo, CacheStats, OpenDroppedResult, Photo, ScanResult, Settings, ThumbLevel, ThumbPriority } from '../shared/types'
+import type { AppInfo, CacheStats, OpenDroppedResult, Photo, ScanResult, ScanSeed, Settings, ThumbLevel, ThumbPriority } from '../shared/types'
 import type { RawExif } from '../shared/exif'
 import { IPC } from '../shared/ipc'
 
@@ -84,9 +84,17 @@ export interface PhotoStreamApi {
   isFullScreen: () => Promise<boolean>
   onWindowState: (listener: (maximized: boolean) => void) => () => void
   onPhotosChanged: (listener: (payload: unknown) => void) => () => void
+  /**
+   * The folder's previous contents, from the metadata cache.
+   *
+   * Arrives once per open, before the scan finishes, so a known folder can be
+   * painted immediately. It is a complete snapshot rather than progress: the
+   * wall derives its layout from the whole set, so growing it in pieces would
+   * re-lay out the wall on every piece.
+   */
+  onScanSeed: (listener: (seed: ScanSeed) => void) => () => void
   onThumbProgress: (listener: (payload: { done: number; total: number }) => void) => () => void
 }
-
 const api: PhotoStreamApi = {
   appInfo: () => ipcRenderer.invoke(IPC.appInfo),
   pickDirectory: (locale) => ipcRenderer.invoke(IPC.pickDirectory, locale),
@@ -128,6 +136,11 @@ const api: PhotoStreamApi = {
     const handler = (_event: unknown, payload: unknown): void => listener(payload)
     ipcRenderer.on(IPC.photosChanged, handler)
     return () => ipcRenderer.off(IPC.photosChanged, handler)
+  },
+  onScanSeed: (listener) => {
+    const handler = (_event: unknown, seed: ScanSeed): void => listener(seed)
+    ipcRenderer.on(IPC.scanSeed, handler)
+    return () => ipcRenderer.off(IPC.scanSeed, handler)
   },
   onThumbProgress: (listener) => {
     const handler = (_event: unknown, payload: { done: number; total: number }): void => listener(payload)

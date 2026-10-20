@@ -78,7 +78,30 @@ export const INITIAL_STATE: WallState = {
 }
 
 export type WallAction =
-  | { type: 'scan/start'; dir: string }
+  | {
+      type: 'scan/start'
+      dir: string
+      /**
+       * Keep the photos already on screen.
+       *
+       * Set when the same folder is being re-scanned (a recursion toggle): the
+       * content is about to be the same, so blanking it first is a visible
+       * flash.
+       */
+      keepPhotos?: boolean
+    }
+  /**
+   * The folder's previous contents, from the metadata cache.
+   *
+   * One complete snapshot per scan, applied at most once. It is not progress:
+   * the wall's layout, its zoom-out floor and its re-anchoring all work on the
+   * whole photo set, so growing it in batches would re-lay out the wall — and
+   * move the view — for every batch.
+   *
+   * Carries the directory the scan was asked for, so a snapshot that belongs to
+   * a folder the user has already left cannot replace the new wall.
+   */
+  | { type: 'scan/seed'; dir: string; photos: Photo[] }
   | { type: 'scan/success'; dir: string; photos: Photo[] }
   | { type: 'scan/error'; message: string }
   | { type: 'photos/delta'; photos: Photo[] }
@@ -110,10 +133,31 @@ export function reducer(state: WallState, action: WallAction): WallState {
         dir: action.dir,
         status: 'scanning',
         scanDone: 0,
-        photos: [],
-        selectedId: null,
+        // Re-scanning the folder already on screen (toggling recursion, say)
+        // keeps its photos: clearing them would blank the wall for the length of
+        // the scan, which is a flash, not progress.
+        photos: action.keepPhotos ? state.photos : [],
+        selectedId: action.keepPhotos ? state.selectedId : null,
         errorMessage: ''
       }
+
+    case 'scan/seed': {
+      // Only while this folder is still opening, and only as the first content
+      // of the scan: a second snapshot (or one for a folder already left) would
+      // restart the layout and move the view.
+      if (state.status !== 'scanning' || state.dir !== action.dir) return state
+      if (state.photos.length > 0 || action.photos.length === 0) return state
+      return {
+        ...state,
+        // Sorted here rather than trusted from the sender: the user may be
+        // browsing oldest-first or by name, and the first paint has to match the
+        // order the finished scan will produce.
+        photos: sortPhotos(action.photos, state.sort),
+        // Not progress: nothing has been scanned yet, this is what the cache
+        // remembered.
+        scanDone: 0
+      }
+    }
 
     case 'scan/success':
       return {
@@ -130,8 +174,20 @@ export function reducer(state: WallState, action: WallAction): WallState {
         history: addToHistory(state.history, action.dir)
       }
 
-    case 'scan/error':
-      return { ...state, status: 'error', errorMessage: action.message }
+    case 'scan/error': {
+      // A failed open leaves nothing to show: any photos in state are the seed
+      // from the metadata cache, and the folder could not be read at all. A
+      // watcher error, by contrast, arrives on a finished wall and must not
+      // clear it.
+      const abandoned = state.status === 'scanning'
+      return {
+        ...state,
+        status: 'error',
+        errorMessage: action.message,
+        photos: abandoned ? [] : state.photos,
+        scanDone: abandoned ? 0 : state.scanDone
+      }
+    }
 
     case 'photos/delta': {
       const photos = sortPhotos(action.photos, state.sort)

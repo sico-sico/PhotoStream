@@ -29,6 +29,10 @@ export default defineConfig({
     },
     plugins: [react()],
     build: {
+      // electron-vite defaults the renderer to `minify: false`; a startup bundle
+      // is parsed straight from disk, so leaving 790 KB of whitespace and
+      // comments in place costs real first-paint time (314 KB minified).
+      minify: 'esbuild',
       rollupOptions: {
         input: { index: resolve('src/renderer/index.html') }
       }

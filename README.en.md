@@ -12,7 +12,7 @@ Open a folder and a few thousand photos appear on one endless canvas, ordered by
 
 Browsing is all it does. It does not import, organise, tag, or edit non-destructively, and it is not a replacement for Lightroom or digiKam. Parsed metadata and thumbnails are cached in `PhotoStreamData/` next to the exe; delete that folder and the app is back to a clean state. Original photos are read, never written.
 
-Scale shaped most of the design. On a test library of 3,226 photos (42.5 GB): about 1.9 s to open the first time, about 107 ms to reopen once metadata is cached, and a steady 60 fps while dragging (17 ms median frame time, no frames over budget). Startup itself is usable in about 0.23 s, and about 0.44 s to the first thumbnail when the last folder is restored. These are measured numbers; the reasoning behind them is in [architecture.md](./docs/architecture.md).
+Scale shaped most of the design. On a test library of 3,226 photos (42.5 GB): about 1.9 s to open the first time, about 107 ms to reopen once metadata is cached, and a steady 60 fps while dragging (17 ms median frame time, no frames over budget). Startup itself is usable in about 0.24 s, about 0.36–0.45 s to the first thumbnail when the last folder is restored, and 0.15–0.22 s to see the wall when reopening a folder the metadata cache already knows. A 40,000-photo library spread over 40 subfolders opens in about 3.5–4.1 s the first time and about 0.6 s once cached. These are measured numbers; the reasoning behind them is in [architecture.md](./docs/architecture.md).
 
 The stack is Electron, React and TypeScript. Image decoding is left to Chromium; thumbnails are generated ahead of time in the main process by `sharp` at two WebP sizes (512 and 2560), so the renderer only positions and transforms them.
 
@@ -213,7 +213,7 @@ Deleting the whole `PhotoStreamData/` restores the initial state. The photos the
 - EXIF dates before 1900 are treated as invalid (usually placeholders or corrupt data).
 - The viewer decodes the full image, about 0.55 s for 7952×5304, showing the cached thumbnail meanwhile.
 - Zooming out stops at a floor. Any further and the wall would not fill the window, and photos would exceed the render limit and disappear. The floor adjusts with library size.
-- Defender gets busy for a while when opening a folder. The app starts no processes; real-time protection is scanning our reads (a 512 KB EXIF prefix per file). Once the cache is warm no files are read and the activity stops. See [architecture.md](./docs/architecture.md).
+- Defender gets busy for a while when opening a folder. The app starts no processes; real-time protection is scanning our reads (a 64 KB EXIF prefix per file, extended to 512 KB only when the metadata area was not fully read and no capture date was found). Once the cache is warm no files are read and the activity stops. See [architecture.md](./docs/architecture.md).
 - No tree browsing of nested folders. Recursion simply merges subfolder files onto the same wall.
 
 ## License

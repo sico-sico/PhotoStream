@@ -33,6 +33,33 @@ describe('wallReducer', () => {  describe('scanning', () => {
       expect(state.errorMessage).toBe('')
     })
 
+    it('drops the cached snapshot when the open fails', () => {
+      // A failed open can leave the cache snapshot in state. A watcher error,
+      // by contrast, arrives on a finished wall and must not clear it.
+      const scanning = reducer(INITIAL_STATE, { type: 'scan/start', dir: '/p' })
+      const seeded = reducer(scanning, { type: 'scan/seed', dir: '/p', photos: [photo('a')] })
+      const failed = reducer(seeded, { type: 'scan/error', message: 'gone' })
+      expect(failed.status).toBe('error')
+      expect(failed.photos).toEqual([])
+
+      const ready = reducer(INITIAL_STATE, { type: 'scan/success', dir: '/p', photos: [photo('a')] })
+      const watched = reducer(ready, { type: 'scan/error', message: 'watch failed' })
+      expect(watched.photos.map((p) => p.id)).toEqual(['a'])
+    })
+
+    it('starts a re-scan of the same folder with its photos still on screen', () => {
+      // Toggling recursion re-opens the same folder; blanking the wall first
+      // would be a flash of empty space for the length of the scan.
+      const ready = reducer(INITIAL_STATE, { type: 'scan/success', dir: '/p', photos: [photo('a')] })
+      const restarted = reducer(ready, { type: 'scan/start', dir: '/p', keepPhotos: true })
+      expect(restarted.status).toBe('scanning')
+      expect(restarted.photos.map((p) => p.id)).toEqual(['a'])
+
+      // Opening a different folder must not carry the old one's photos over.
+      const other = reducer(ready, { type: 'scan/start', dir: '/q' })
+      expect(other.photos).toEqual([])
+    })
+
     it('stores sorted photos on success, newest first by default', () => {
       const state = reducer(INITIAL_STATE, {
         type: 'scan/success',
@@ -42,6 +69,33 @@ describe('wallReducer', () => {  describe('scanning', () => {
       expect(state.status).toBe('ready')
       expect(state.photos.map((p) => p.id)).toEqual(['b', 'a'])
       expect(state.scanDone).toBe(2)
+    })
+
+    it('paints the cached snapshot once, sorted, as the first content of a scan', () => {
+      const scanning = reducer(INITIAL_STATE, { type: 'scan/start', dir: '/p' })
+      const seeded = reducer(scanning, {
+        type: 'scan/seed',
+        dir: '/p',
+        photos: [photo('a', '2019-01-01'), photo('b', '2021-01-01')]
+      })
+      expect(seeded.status).toBe('scanning')
+      expect(seeded.photos.map((p) => p.id)).toEqual(['b', 'a'])
+      // Nothing has been scanned yet; this is what the cache remembered.
+      expect(seeded.scanDone).toBe(0)
+
+      // A second snapshot would re-lay out and move the wall, so it is ignored.
+      const again = reducer(seeded, { type: 'scan/seed', dir: '/p', photos: [photo('c')] })
+      expect(again).toBe(seeded)
+    })
+
+    it('ignores a cached snapshot for another folder or a finished scan', () => {
+      const scanning = reducer(INITIAL_STATE, { type: 'scan/start', dir: '/p' })
+      const other = reducer(scanning, { type: 'scan/seed', dir: '/q', photos: [photo('x')] })
+      expect(other).toBe(scanning)
+
+      const ready = reducer(scanning, { type: 'scan/success', dir: '/p', photos: [photo('a')] })
+      const late = reducer(ready, { type: 'scan/seed', dir: '/p', photos: [photo('b')] })
+      expect(late).toBe(ready)
     })
 
     it('re-sorts the photos already loaded when the order changes', () => {

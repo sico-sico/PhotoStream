@@ -61,6 +61,7 @@ if (hasDom) {
         isMaximized: async () => false,
         onWindowState: () => () => {},
         onPhotosChanged: () => () => {},
+        onScanSeed: () => () => {},
         onOpenExternal: () => () => {},
         onThumbProgress: () => () => {}
       }

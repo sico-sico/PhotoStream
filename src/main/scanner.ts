@@ -5,7 +5,7 @@ import type { Photo, ScanResult } from '../shared/types'
 import { resolvePhotoDate } from '../shared/date'
 import { sortPhotos } from '../shared/photoStore'
 import { readImageMetadata } from './metadata'
-import type { MetadataCache } from './metadata-cache'
+import type { CacheWrite, CachedIndex, MetadataCache } from './metadata-cache'
 
 /**
  * Formats the wall accepts.
@@ -31,10 +31,29 @@ export function photoId(path: string): string {
   return path.toLowerCase()
 }
 
+/**
+ * Files read in parallel during a scan.
+ *
+ * A file read is one `open` that costs ~85 µs however many bytes it returns, so
+ * the scan is bound by how many reads are in flight, not by bytes. Measured on a
+ * cold 40 000-photo folder: 8 workers 4592 ms, 16 workers 3976 ms, 32 workers
+ * 3961 ms. Past 16 the queue is saturated and more workers only add contention.
+ */
+const SCAN_CONCURRENCY = 16
+
+/**
+ * Parsed rows held before writing them out.
+ *
+ * A batch of this size commits in ~10 ms, so the scan pays one transaction per
+ * few thousand photos: bounded memory, and a scan that is interrupted still
+ * keeps everything written so far.
+ */
+const WRITE_BATCH = 4096
+
 export interface ScanOptions {
   /** Called after each photo so the UI can render tiles progressively. */
   onPhoto?: (photo: Photo, index: number, total: number) => void
-  /** Number of files read in parallel. 8 saturates the disk without thrashing. */
+  /** Number of files read in parallel; defaults to `SCAN_CONCURRENCY`. */
   concurrency?: number
   signal?: AbortSignal
   /**
@@ -45,6 +64,14 @@ export interface ScanOptions {
    * the file reads entirely.
    */
   cache?: MetadataCache
+  /**
+   * Cache lookups, already read for this folder.
+   *
+   * `open()` reads the folder's cached rows before starting the scan — the wall
+   * paints from them — so it hands the same set here instead of making the scan
+   * query the same rows again.
+   */
+  index?: CachedIndex
   /**
    * Include JPEGs in subdirectories, recursively. Off by default.
    *
@@ -145,15 +172,23 @@ export async function listImageFiles(dir: string, recursive = false): Promise<st
  * from `2025/a.jpg`. `basename` is deliberately not applied: two same-named
  * photos in different subfolders are different photos, and showing both as
  * `a.jpg` would make the filename filter match the wrong one.
+ *
+ * `lookup` is the scan's in-memory view of the cache, and `writes` collects what
+ * was parsed so the caller can commit it in one transaction.
  */
-async function toPhoto(dir: string, name: string, cache?: MetadataCache): Promise<Photo | null> {
+async function toPhoto(
+  dir: string,
+  name: string,
+  lookup?: CachedIndex,
+  writes?: CacheWrite[]
+): Promise<Photo | null> {
   // Normalise the separator so a nested name works on Windows and in tests.
   const path = join(dir, ...name.split('/'))
   try {
     const info = await stat(path)
     // `stat` is needed regardless: it supplies the mtime and size that decide
     // whether a cached row is still valid.
-    const cached = cache?.lookup(path, info.mtimeMs, info.size)
+    const cached = lookup?.get(path, info.mtimeMs, info.size)
     if (cached) {
       // The cache stores only what the file itself said. The mtime fallback is
       // applied here rather than cached, so changing the policy never leaves a
@@ -173,7 +208,15 @@ async function toPhoto(dir: string, name: string, cache?: MetadataCache): Promis
     }
 
     const meta = await readImageMetadata(path)
-    cache?.store(path, info.mtimeMs, info.size, meta)
+    writes?.push({
+      path,
+      mtimeMs: info.mtimeMs,
+      sizeBytes: info.size,
+      width: meta.width,
+      height: meta.height,
+      takenAt: meta.takenAt,
+      orientation: meta.orientation
+    })
     const date = resolvePhotoDate(meta.takenAt, info.mtimeMs)
     return {
       id: photoId(path),
@@ -202,8 +245,17 @@ export async function scanDirectory(dir: string, options: ScanOptions = {}): Pro
   const started = Date.now()
   const absolute = resolve(dir)
   const names = await listImageFiles(absolute, options.recursive === true)
-  const concurrency = Math.max(1, options.concurrency ?? 8)
+  const concurrency = Math.max(1, options.concurrency ?? SCAN_CONCURRENCY)
   const photos: Photo[] = []
+  // One query for the whole folder instead of one per photo, and a handful of
+  // transactions instead of one per photo: on 40 000 photos the per-row paths
+  // cost 313 ms and 2171 ms respectively.
+  const lookup = options.index ?? options.cache?.snapshot(absolute)
+  const writes: CacheWrite[] = []
+  const flush = (): void => {
+    if (writes.length === 0) return
+    options.cache?.storeMany(writes.splice(0, writes.length))
+  }
   let skipped = 0
   let cursor = 0
 
@@ -214,17 +266,21 @@ export async function scanDirectory(dir: string, options: ScanOptions = {}): Pro
       if (index >= names.length) return
       if (options.signal?.aborted) return
 
-      const photo = await toPhoto(absolute, names[index], options.cache)
+      const photo = await toPhoto(absolute, names[index], lookup, writes)
       if (!photo) {
         skipped += 1
         continue
       }
       photos.push(photo)
       options.onPhoto?.(photo, photos.length, names.length)
+      // Bounded in memory and still crash-tolerant: an interrupted scan keeps
+      // everything up to the last flush.
+      if (writes.length >= WRITE_BATCH) flush()
     }
   }
 
   await Promise.all(Array.from({ length: Math.min(concurrency, names.length) }, worker))
+  flush()
 
   // Drop rows for files that no longer exist in *this* folder, so the database
   // does not grow with every re-export. Scoped to the folder: the cache is

@@ -431,9 +431,16 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
     const offProgress = window.photoStream.onThumbProgress((payload) => {
       if (payload && typeof payload.done === 'number' && typeof payload.total === 'number') setProgress(payload)
     })
+    // The folder's previous contents, from the metadata cache. One snapshot per
+    // open, which the wall paints while the scan confirms it.
+    const offSeed = window.photoStream.onScanSeed((seed) => {
+      if (!seed || typeof seed.dir !== 'string' || !Array.isArray(seed.photos)) return
+      dispatch({ type: 'scan/seed', dir: seed.dir, photos: seed.photos as Photo[] })
+    })
     return () => {
       offPhotos()
       offProgress()
+      offSeed()
     }
   }, [])
 
@@ -462,9 +469,14 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
       // one. The restore passes `user: false` so a folder dropped during launch
       // is not then replaced by the remembered one.
       if (options.user !== false) userOpenedRef.current = true
-      dispatch({ type: 'scan/start', dir })
+      const reopening = stateRef.current.dir === dir
+      dispatch({ type: 'scan/start', dir, keepPhotos: reopening })
+      // Kept across opens on purpose: the URLs are keyed by photo id, so
+      // returning to a folder paints its tiles immediately from the strings
+      // already known instead of unmounting every <img> and reloading it. Only
+      // the "already asked for" bookkeeping is reset, so a rendition the cache
+      // sweeper deleted is requested again.
       requested.current.clear()
-      renditionUrls.current.clear()
       setRenditionTick((value) => value + 1)
       const generation = beginScan()
       try {
@@ -539,7 +551,6 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
       userOpenedRef.current = true
       dispatch({ type: 'scan/start', dir: path })
       requested.current.clear()
-      renditionUrls.current.clear()
       setRenditionTick((value) => value + 1)
       const generation = beginScan()
       try {

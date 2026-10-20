@@ -1,9 +1,10 @@
 import { ipcMain, dialog, shell, BrowserWindow } from 'electron'
 import { stat } from 'node:fs/promises'
-import { basename, relative as relativePath, sep } from 'node:path'
+import { basename, relative as relativePath, resolve, sep } from 'node:path'
 import type { AppInfo, CacheStats, Photo, ScanResult, Settings, ThumbLevel } from '../shared/types'
 import { IPC } from '../shared/ipc'
 import { scanDirectory } from './scanner'
+import { photoId } from './scanner'
 import { resolveOpenTarget } from './drop'
 import type { OpenDroppedResult } from '../shared/types'
 import { ensureThumbnail, ensureThumbnails, type ThumbRequest } from './thumbnails'
@@ -14,10 +15,32 @@ import { thumbUrl, photoUrl } from './protocol'
 import { resolvePhotoDate } from '../shared/date'
 import { findPhoto, removePhoto, sortPhotos, upsertPhoto } from '../shared/photoStore'
 import { readImageMetadata, readFullExif } from './metadata'
-import type { MetadataCache } from './metadata-cache'
+import type { CachedPhotoRow, MetadataCache } from './metadata-cache'
 import type { ThumbCache } from './cache-maintenance'
 import type { RawExif } from '../shared/exif'
 import { locales } from '../shared/i18n'
+
+/**
+ * A speculative scan, started before the renderer asks for it.
+ */
+interface PrefetchedScan {
+  /** As the caller passed it, for exact comparison with the later request. */
+  request: string
+  /** Absolute form, for comparison against a differently written path. */
+  absolute: string
+  recursive: boolean
+  generation: number
+  controller: AbortController
+  result: Promise<ScanResult>
+  /**
+   * Whether the scan has finished.
+   *
+   * An `open` that adopts this scan still seeds the wall from the cache, unless
+   * the scan is already done — in which case the seed would only be a stale
+   * copy of an answer that is already on its way.
+   */
+  settled: boolean
+}
 
 /**
  * Owns the currently open library: scanning, watching, thumbnail warm-up and
@@ -43,6 +66,9 @@ export class PhotoLibrary {
    * dropping three folders reads EXIF for two libraries nobody will ever see.
    */
   readonly scanSignals: AbortSignal[] = []
+
+  /** A scan started before the renderer asked; adopted by the matching `open`. */
+  private prefetched: PrefetchedScan | null = null
 
   constructor(
     readonly thumbCacheDir: string,
@@ -86,12 +112,78 @@ export class PhotoLibrary {
    * Aborts whatever scan was already running: the user has moved on, and reading
    * metadata for a library nobody will see is pure waste.
    */
-  claim(): { generation: number; signal: AbortSignal } {
+  claim(): { generation: number; signal: AbortSignal; controller: AbortController } {
+    // A new claim supersedes any speculative scan: either the user has asked for
+    // another folder, or this claim belongs to the prefetch itself.
+    this.prefetched = null
     this.scanning?.abort()
     const controller = new AbortController()
     this.scanning = controller
     this.scanSignals.push(controller.signal)
-    return { generation: ++this.generation, signal: controller.signal }
+    return { generation: ++this.generation, signal: controller.signal, controller }
+  }
+
+  /**
+   * Scan the folder the renderer is about to ask for, before it asks.
+   *
+   * At startup the renderer has to mount, read the settings file and call back
+   * before any scanning begins; that is window-creation time spent idle on the
+   * one folder the app already knows it will open. `open()` adopts the result
+   * when the request arrives, so the folder is still read exactly once.
+   *
+   * A prefetch is speculative: any later `claim()` (a drop, a folder picker)
+   * aborts it, and a request for a different folder abandons it.
+   */
+  prefetch(dir: string, options: { recursive?: boolean } = {}): void {
+    if (!dir || this.prefetched) return
+    const recursive = options.recursive === true
+    const { generation, signal, controller } = this.claim()
+    const result = scanDirectory(dir, { cache: this.metadataCache, recursive, signal })
+    // The user may drop another folder before the renderer ever asks for this
+    // one; that abort rejects the promise with no adopter. Swallowing the
+    // rejection here keeps a deliberately cancelled scan from looking like a
+    // crash, while `open()` still sees the original rejection when it adopts.
+    result.catch(() => undefined)
+    const pending: PrefetchedScan = {
+      request: dir,
+      absolute: resolve(dir),
+      recursive,
+      generation,
+      controller,
+      result,
+      settled: false
+    }
+    void result.then(
+      () => {
+        pending.settled = true
+      },
+      () => {
+        pending.settled = true
+      }
+    )
+    this.prefetched = pending
+  }
+
+  /**
+   * Take the matching prefetch, if there is one, so `open` can await its result
+   * instead of starting a second scan over the same files.
+   */
+  private takePrefetch(dir: string, recursive: boolean): PrefetchedScan | null {
+    const pending = this.prefetched
+    if (!pending) return null
+    const matches =
+      pending.generation === this.generation &&
+      pending.recursive === recursive &&
+      (pending.request === dir || pending.absolute === resolve(dir))
+    if (!matches) {
+      // Scanning a folder nobody is going to look at is exactly the waste the
+      // abort machinery exists to prevent.
+      this.prefetched = null
+      pending.controller.abort()
+      return null
+    }
+    this.prefetched = null
+    return pending
   }
 
   /**
@@ -103,48 +195,172 @@ export class PhotoLibrary {
    */
   async open(
     dir: string,
-    options: { recursive?: boolean; generation?: number; signal?: AbortSignal } = {}
+    options: {
+      recursive?: boolean
+      generation?: number
+      signal?: AbortSignal
+      /**
+       * Directory string the renderer used to ask for this open.
+       *
+       * The cached snapshot is keyed by it, so the renderer can tell which open
+       * a snapshot belongs to. A dropped photo asks with a *file* path but opens
+       * its folder, so the two strings differ; without this the snapshot would
+       * be thrown away and the wall would stay blank until the scan finished.
+       */
+      announceAs?: string
+    } = {}
   ): Promise<ScanResult> {
+    const recursive = options.recursive === true
+    // A startup prefetch for this exact folder and mode is already reading it;
+    // awaiting that instead of claiming would abort it and pay for the files
+    // twice.
+    const adopted = options.generation === undefined ? this.takePrefetch(dir, recursive) : null
+
     // Claiming here keeps every caller that has nothing to await working. The
     // drop handler passes its own generation instead, because its token has to
     // predate the `stat` it already awaited.
-    const claim = options.generation === undefined ? this.claim() : null
-    const generation = claim?.generation ?? options.generation!
-    const signal = claim?.signal ?? options.signal
+    const claim = adopted === null && options.generation === undefined ? this.claim() : null
+    const generation = adopted?.generation ?? claim?.generation ?? options.generation!
+    const signal = adopted?.controller.signal ?? claim?.signal ?? options.signal
 
     this.close()
-    this.recursive = options.recursive === true
+    this.recursive = recursive
 
-    const result = await scanDirectory(dir, {
-      cache: this.metadataCache,
-      recursive: this.recursive,
-      signal
-    })
+    // Paint what the metadata cache already knows before touching the disk.
+    //
+    // The scan has to `stat` every file, which on a sleeping drive or a network
+    // share is the slowest part of opening a folder; the cache answers in one
+    // indexed query. Sent once, as a complete snapshot: the wall's layout is
+    // derived from the whole photo set, so feeding it in pieces would re-lay
+    // out and re-anchor the view on every piece.
+    //
+    // Read once and shared with the scan, which would otherwise ask the same
+    // 40 000 rows for a second time.
+    //
+    // An adopted prefetch is seeded too: at startup that scan is usually still
+    // running when the renderer asks, and waiting for it would be more empty
+    // wall. Only a prefetch that has already finished is left alone — its
+    // answer is imminent, and a seed would just be a stale copy.
+    const snapshot = adopted === null ? this.metadataCache?.snapshot(resolve(dir)) : undefined
+    if (adopted === null || !adopted.settled) {
+      this.emitCachedSeed(options.announceAs ?? dir, dir, recursive, generation, snapshot?.rows)
+    }
+
+    const result =
+      adopted?.result ??
+      scanDirectory(dir, {
+        cache: this.metadataCache,
+        index: snapshot,
+        recursive: this.recursive,
+        signal
+      })
+
+    const scanned = await result
 
     // A later open has already taken over: this result is for a folder the user
     // moved on from. Discarding it is what makes "the last folder you dropped"
     // the one you actually see, regardless of which scan finishes first.
-    if (generation !== this.generation) return result
+    if (generation !== this.generation) return scanned
 
     // Only the winner clears the in-flight scan, so a stale open cannot make a
     // newer one look finished.
     if (signal?.aborted !== true) this.scanning = null
-    this.photos = result.photos
-    this.dir = result.dir
+    this.photos = scanned.photos
+    this.dir = scanned.dir
     // `close()` above detached the previous watcher; start the new one only
     // once this scan is the winner, or an abandoned folder keeps a recursive
     // watch open for the rest of the session.
-    this.watcher = this.startWatching(result.dir)
+    this.watcher = this.startWatching(scanned.dir)
     // No eager warm-up here. Generating renditions for every file made a large
     // folder take minutes before the wall felt usable, and most of those
     // thumbnails were never looked at. The renderer asks for what is on screen
     // instead, so work scales with what the user actually sees.
-    return { dir: result.dir, photos: result.photos, skipped: result.skipped, durationMs: result.durationMs }
+    return {
+      dir: scanned.dir,
+      photos: scanned.photos,
+      skipped: scanned.skipped,
+      durationMs: scanned.durationMs
+    }
   }
 
   close(): void {
     this.watcher?.close()
     this.watcher = null
+  }
+
+  /**
+   * Send the cached view of `dir` as one complete snapshot.
+   *
+   * Best effort and empty-safe: no cache, an empty folder or a query failure all
+   * mean the wall simply waits for the scan.
+   *
+   * One message rather than chunks on purpose. The renderer's layout, its
+   * zoom-out floor (a binary search that re-lays out the whole set) and its
+   * re-anchoring all key off the photo array, so each extra delivery is a full
+   * re-layout and a possible jump of the view — measured on a 20 000-photo
+   * library as a visibly flickering wall, not a smooth fill-in.
+   */
+  private emitCachedSeed(
+    announceAs: string,
+    dir: string,
+    recursive: boolean,
+    generation: number,
+    rows?: readonly CachedPhotoRow[]
+  ): void {
+    if (!this.metadataCache) return
+    // The user may have opened another folder while the rows were being read.
+    if (generation !== this.generation) return
+    const photos = this.cachedPhotos(dir, recursive, rows)
+    if (photos.length === 0) return
+    this.notify(IPC.scanSeed, { dir: announceAs, photos })
+  }
+
+  /**
+   * The photos of `dir` as the metadata cache remembers them.
+   *
+   * File-free: one indexed query, so the renderer can paint the folder it is
+   * about to open instead of waiting for the scan. What comes back is *stale by
+   * construction* — a photo may have been deleted or re-exported since — which
+   * is why the caller treats it as a placeholder and the scan replaces it.
+   *
+   * Only rows from this folder (and, when `recursive`, below it) are returned:
+   * the cache serves every library the user has ever opened.
+   */
+  cachedPhotos(dir: string, recursive: boolean, rows?: readonly CachedPhotoRow[]): Photo[] {
+    return sortPhotos([...this.cachedPhotoStream(dir, recursive, rows)])
+  }
+
+  /** The same photos, in cache order, for callers that build them lazily. */
+  private *cachedPhotoStream(
+    dir: string,
+    recursive: boolean,
+    rows?: readonly CachedPhotoRow[]
+  ): Generator<Photo> {
+    if (!this.metadataCache) return
+    const absolute = resolve(dir)
+
+    for (const row of rows ?? this.metadataCache.list(absolute)) {
+      const relative = relativePath(absolute, row.path)
+      // A row for the folder itself or for a path outside it cannot describe a
+      // photo in this library; the range query should make that impossible, so
+      // this only guards against a hand-edited database.
+      if (!relative || relative.startsWith('..')) continue
+      if (!recursive && relative.includes(sep)) continue
+
+      const date = resolvePhotoDate(row.takenAt, row.mtimeMs)
+      yield {
+        id: photoId(row.path),
+        path: row.path,
+        // `pic://` URLs and the caption use forward slashes, as a scan does.
+        name: relative.split(sep).join('/'),
+        width: row.width,
+        height: row.height,
+        takenAt: date.takenAt,
+        dateSource: date.dateSource,
+        mtimeMs: row.mtimeMs,
+        sizeBytes: row.sizeBytes
+      }
+    }
   }
 
   /**
@@ -409,7 +625,14 @@ export function registerIpc(deps: IpcDeps): void {
       // so dropping A then B could leave A on screen.
       const { generation, signal } = deps.library.claim()
       const resolved = await resolveOpenTarget(target)
-      const result = await deps.library.open(resolved.dir, { recursive, generation, signal })
+      // `announceAs`: the renderer's state is keyed by the string it dropped, so
+      // the cached snapshot has to be announced under that same string.
+      const result = await deps.library.open(resolved.dir, {
+        recursive,
+        generation,
+        signal,
+        announceAs: target
+      })
       return { ...result, photo: resolved.photo }
     }
   )

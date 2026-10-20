@@ -1,7 +1,7 @@
 ﻿// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, renderHook, waitFor } from '@testing-library/react'
-import type { OpenDroppedResult, Photo, Settings, ThumbLevel } from '@shared/types'
+import type { OpenDroppedResult, Photo, ScanSeed, Settings, ThumbLevel } from '@shared/types'
 import { DEFAULT_SETTINGS } from '@shared/types'
 import { useWall } from './useWall'
 
@@ -43,12 +43,14 @@ interface FakeApi {
   isMaximized: ReturnType<typeof vi.fn>
   onWindowState: ReturnType<typeof vi.fn>
   onPhotosChanged: ReturnType<typeof vi.fn>
+  onScanSeed: ReturnType<typeof vi.fn>
   onOpenExternal: ReturnType<typeof vi.fn>
   onThumbProgress: ReturnType<typeof vi.fn>
 }
 
 let api: FakeApi
 let photoListener: ((payload: unknown) => void) | null
+let scanListener: ((seed: ScanSeed) => void) | null
 let externalListener: ((path: string) => void) | null
 let progressListener: ((payload: { done: number; total: number }) => void) | null
 /** Push a finished rendition into the hook, as the main process would. */
@@ -58,6 +60,7 @@ let readyQueue: Array<[string, string, ThumbLevel]> = []
 
 function installApi(settings: Partial<Settings> = {}): void {
   photoListener = null
+  scanListener = null
   externalListener = null
   progressListener = null
   readyQueue = []
@@ -108,6 +111,12 @@ function installApi(settings: Partial<Settings> = {}): void {
       externalListener = listener
       return () => {
         externalListener = null
+      }
+    }),
+    onScanSeed: vi.fn().mockImplementation((listener: (seed: ScanSeed) => void) => {
+      scanListener = listener
+      return () => {
+        scanListener = null
       }
     }),
     onThumbProgress: vi.fn().mockImplementation((listener: (payload: { done: number; total: number }) => void) => {
@@ -936,6 +945,65 @@ describe('useWall', () => {
       expect(result.current.progress).toEqual({ done: 2, total: 8 })
     })
 
+    it('paints the cached snapshot while the folder is being re-read', async () => {
+      // The metadata cache knows the folder from last time. Painting that one
+      // snapshot is what makes a large library appear immediately; the scan
+      // then replaces it in a single step.
+      const scan = deferred<{ dir: string; photos: Photo[]; skipped: number; durationMs: number }>()
+      api.openDirectory.mockReturnValue(scan.promise)
+      const { result } = renderHook(() => useWall(viewport))
+      await waitFor(() => expect(scanListener).not.toBeNull())
+
+      act(() => {
+        result.current.chooseFolder()
+      })
+      await waitFor(() => expect(api.openDirectory).toHaveBeenCalled())
+
+      act(() => {
+        scanListener?.({ dir: '/photos', photos: [photo('cached', '2019-01-01')] })
+      })
+      expect(result.current.state.status).toBe('scanning')
+      expect(result.current.visiblePhotos.map((p) => p.id)).toEqual(['cached'])
+      // The snapshot is not scan progress.
+      expect(result.current.state.scanDone).toBe(0)
+
+      await act(async () => {
+        scan.resolve({ dir: '/photos', photos: [photo('fresh', '2021-01-01')], skipped: 0, durationMs: 5 })
+        await scan.promise
+      })
+      // The scan replaces the snapshot rather than merging with it: a photo
+      // deleted since the cache was written has to disappear.
+      expect(result.current.visiblePhotos.map((p) => p.id)).toEqual(['fresh'])
+    })
+
+    it('ignores a cached snapshot for a folder the wall has left', async () => {
+      api.openDirectory.mockResolvedValue({ dir: '/photos', photos: [photo('a')], skipped: 0, durationMs: 1 })
+      const { result } = renderHook(() => useWall(viewport))
+      await act(async () => {
+        await result.current.chooseFolder()
+      })
+
+      act(() => {
+        scanListener?.({ dir: '/other', photos: [photo('stray')] })
+      })
+
+      expect(result.current.visiblePhotos.map((p) => p.id)).toEqual(['a'])
+    })
+
+    it('ignores a cached snapshot that arrives after the scan finished', async () => {
+      api.openDirectory.mockResolvedValue({ dir: '/photos', photos: [photo('a')], skipped: 0, durationMs: 1 })
+      const { result } = renderHook(() => useWall(viewport))
+      await act(async () => {
+        await result.current.chooseFolder()
+      })
+
+      act(() => {
+        scanListener?.({ dir: '/photos', photos: [photo('late')] })
+      })
+
+      expect(result.current.visiblePhotos.map((p) => p.id)).toEqual(['a'])
+    })
+
     it('unsubscribes on unmount', async () => {
       const { unmount } = renderHook(() => useWall(viewport))
       await waitFor(() => expect(photoListener).not.toBeNull())
@@ -943,6 +1011,7 @@ describe('useWall', () => {
       unmount()
       expect(photoListener).toBeNull()
       expect(progressListener).toBeNull()
+      expect(scanListener).toBeNull()
     })
   })
 
