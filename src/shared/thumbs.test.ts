@@ -7,6 +7,7 @@ import {
   pickThumbLevel,
   thumbKey,
   viewerEdge,
+  wallRenditionEdge,
   zoomTierAddsDetail
 } from './thumbs'
 
@@ -46,6 +47,48 @@ describe('viewerEdge', () => {
   })
 })
 
+describe('wallRenditionEdge', () => {
+  it('keeps the 512px floor for ordinary shapes', () => {
+    // These are all painted inside a 512px bitmap at the default zoom: the
+    // layout's row height (220) or column width (260) times the aspect ratio.
+    expect(wallRenditionEdge(6000, 4000)).toBe(THUMB_SIZES.wall)
+    expect(wallRenditionEdge(1200, 800)).toBe(THUMB_SIZES.wall)
+    expect(wallRenditionEdge(800, 1200)).toBe(THUMB_SIZES.wall)
+    expect(wallRenditionEdge(1920, 1080)).toBe(THUMB_SIZES.wall)
+    expect(wallRenditionEdge(4000, 2000)).toBe(THUMB_SIZES.wall)
+    // A handful of pixels over the floor is not worth a larger file.
+    expect(wallRenditionEdge(2200, 1000)).toBe(THUMB_SIZES.wall)
+  })
+
+  it('grows with a panorama the wall paints wider than the floor', () => {
+    // `grid` fixes the row height at 220px, so the painted width is 220 * a.
+    expect(wallRenditionEdge(4000, 1000)).toBe(880)
+    expect(wallRenditionEdge(14525, 3798)).toBe(842)
+    expect(wallRenditionEdge(5000, 1000)).toBe(1100)
+  })
+
+  it('grows with a tall photo, whose long edge is the tile height', () => {
+    // `masonry` fixes the column width at 260px, so a 1:2.5 photo is painted
+    // 260x650 and a 1:5 photo 260x1300. A 1:2 portrait (520px) stays on the
+    // 512px floor: the same tolerance ordinary photos get.
+    expect(wallRenditionEdge(1000, 2000)).toBe(THUMB_SIZES.wall)
+    expect(wallRenditionEdge(1000, 2500)).toBe(650)
+    expect(wallRenditionEdge(1000, 5000)).toBe(1300)
+  })
+
+  it('clamps broken ratios the way the layout does', () => {
+    // A corrupt EXIF height must not ask for a 100 000px rendition.
+    expect(wallRenditionEdge(100000, 1000)).toBe(1100)
+    expect(wallRenditionEdge(1000, 100000)).toBe(1300)
+  })
+
+  it('falls back to the floor when the dimensions are unknown', () => {
+    expect(wallRenditionEdge(0, 0)).toBe(THUMB_SIZES.wall)
+    expect(wallRenditionEdge(-1, 500)).toBe(THUMB_SIZES.wall)
+    expect(wallRenditionEdge(Number.NaN, 500)).toBe(THUMB_SIZES.wall)
+  })
+})
+
 describe('zoomTierAddsDetail', () => {
   it('says a source below the wall size gains nothing from a zoom rendition', () => {
     // Both tiers encode to the source's own pixels because of
@@ -58,13 +101,17 @@ describe('zoomTierAddsDetail', () => {
 
   it('says a larger source gains detail', () => {
     expect(zoomTierAddsDetail(6000, 4000)).toBe(true)
-    expect(zoomTierAddsDetail(THUMB_SIZES.wall + 1, 100)).toBe(true)
+    expect(zoomTierAddsDetail(6000, 1000)).toBe(true)
   })
 
-  it('judges by the long edge, so a tall narrow photo is measured correctly', () => {
-    // 200x900 has a long edge past the wall size, so `wall` downsamples it.
-    expect(zoomTierAddsDetail(200, 900)).toBe(true)
-    // 100x400 does not, so `wall` is already the original pixels.
+  it('compares against the rendition the wall will actually produce', () => {
+    // 200x900 is painted 260x1170 in `masonry`, so its wall rendition is the
+    // source's own 900px long edge — a zoom file would be a duplicate.
+    expect(zoomTierAddsDetail(200, 900)).toBe(false)
+    // The same long edge in a 3:2 shape stays inside the 512px wall rendition,
+    // so zooming the wall really does gain detail.
+    expect(zoomTierAddsDetail(900, 600)).toBe(true)
+    // 100x400 never leaves the source size either.
     expect(zoomTierAddsDetail(100, 400)).toBe(false)
   })
 

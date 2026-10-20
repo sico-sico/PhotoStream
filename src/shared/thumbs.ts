@@ -1,10 +1,15 @@
 import type { ThumbLevel } from './types'
+import { LAYOUT_DEFAULTS, MAX_DISPLAY_ASPECT } from './layout'
 
 /**
  * Cached rendition sizes in pixels (long edge).
  *
  * `full` is absent on purpose: it is the original file, never generated and
  * never cached.
+ *
+ * `wall` is the *floor*, not a fixed size: photos whose aspect ratio makes the
+ * wall paint them wider than this get a larger rendition, sized by
+ * `wallRenditionEdge`. See that function for why.
  *
  * `zoom` was 1280 and is now 2560. At 1280 the wall jumped straight from a
  * 1280px WebP to the original JPEG, and a camera file is often 6000–8000px —
@@ -18,6 +23,40 @@ import type { ThumbLevel } from './types'
 export const THUMB_SIZES: Record<Exclude<ThumbLevel, 'full'>, number> = {
   wall: 512,
   zoom: 2560
+}
+
+/**
+ * Long edge a `wall` rendition needs for a photo of this shape.
+ *
+ * The wall paints each tile at the photo's own aspect ratio, and every layout
+ * fixes only one of the two dimensions: `grid` sets the row height, `masonry`
+ * the column width, `square` the cell. A single 512px long edge is therefore
+ * adequate only near 1:1. The panorama that prompted this (14525x3798) is
+ * painted 841x220 in `grid` — 1.6x the bitmap — and 764px wide inside a 200px
+ * `square` cell, which is why it looked smeared.
+ *
+ * Solving the three layouts for the painted long edge, with
+ * `a = long / short` clamped the way `computeLayout` clamps it:
+ *
+ *   landscape: max(targetRowHeight * a, columnWidth)
+ *   portrait:  columnWidth * a
+ *
+ * Only photos past roughly 2:1 (or 1:2) clear the 512px floor, so ordinary
+ * photos keep the rendition they have always had. `withoutEnlargement` still
+ * caps the result at the source size.
+ */
+export function wallRenditionEdge(width: number, height: number): number {
+  const w = Number(width)
+  const h = Number(height)
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return THUMB_SIZES.wall
+  const aspect = Math.min(Math.max(w >= h ? w / h : h / w, 1), MAX_DISPLAY_ASPECT)
+  const needed =
+    w >= h
+      ? Math.max(LAYOUT_DEFAULTS.targetRowHeight * aspect, LAYOUT_DEFAULTS.columnWidth)
+      : LAYOUT_DEFAULTS.columnWidth * aspect
+  // A few pixels over the floor does not warrant a second, larger file: the
+  // 512px rendition already covers a tile at that ratio within a few percent.
+  return needed > THUMB_SIZES.wall * 1.1 ? Math.ceil(needed) : THUMB_SIZES.wall
 }
 
 /**
@@ -52,6 +91,10 @@ export function pickThumbLevel(worldPixels: number, scale: number, devicePixelRa
  * `wall`, 192 B for `zoom` — two files, no extra detail. The second encode is
  * pure cost, and it happens for every small image in the library.
  *
+ * The comparison is against `wallRenditionEdge`, not the 512px floor, because a
+ * panorama's `wall` file is already larger than 512: a 600x200 source gets a
+ * 600x200 wall rendition, so a zoom file of the same size would be duplication.
+ *
  * Deciding from the source dimensions rather than the target ones is what makes
  * this possible: the scan has already parsed `width`/`height` for every photo, so
  * no extra file read is needed.
@@ -63,7 +106,7 @@ export function pickThumbLevel(worldPixels: number, scale: number, devicePixelRa
 export function zoomTierAddsDetail(width: number, height: number): boolean {
   if (!(width > 0) || !(height > 0)) return true
   const longEdge = Math.max(width, height)
-  return longEdge > THUMB_SIZES.wall
+  return longEdge > wallRenditionEdge(width, height)
 }
 
 /**

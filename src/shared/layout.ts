@@ -34,12 +34,23 @@ export const LAYOUT_DEFAULTS = {
   cellSize: 200
 } as const
 
+/**
+ * Aspect-ratio clamp, applied to width/height.
+ *
+ * Guards against divide-by-zero and absurd panoramas from broken metadata (a
+ * corrupt EXIF height, a one-pixel-tall stitch). 5:1 is also the widest tile
+ * the layouts are designed to show. `thumbs.ts` reuses the same bound to size
+ * wall renditions, so the two cannot disagree about the widest tile possible.
+ */
+export const MIN_DISPLAY_ASPECT = 0.2
+export const MAX_DISPLAY_ASPECT = 5
+
 /** Aspect ratio guard: avoids divide-by-zero and absurd panoramas from broken metadata. */
 function aspectOf(photo: Photo): number {
   const w = Number(photo.width)
   const h = Number(photo.height)
   if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return 1
-  return Math.min(Math.max(w / h, 0.2), 5)
+  return Math.min(Math.max(w / h, MIN_DISPLAY_ASPECT), MAX_DISPLAY_ASPECT)
 }
 
 function round(n: number): number {

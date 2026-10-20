@@ -107,6 +107,20 @@ describe('PhotoLibrary', () => {
     expect(url).toContain('-wall.webp')
   })
 
+  it('sizes a panorama from the dimensions the scan parsed', async () => {
+    // The wall rendition is aspect-aware, and the dimensions come from the
+    // scan: nothing here reads the file again. A 4:1 photo is painted 880px
+    // wide by the justified layout, so that is the rendition it gets.
+    await sharp({ create: { width: 600, height: 150, channels: 3, background: { r: 30, g: 90, b: 160 } } })
+      .jpeg()
+      .toFile(join(photoDir, 'pano.jpg'))
+    await library.open(photoDir)
+
+    const pano = library.all.find((photo) => photo.name === 'pano.jpg')!
+    const url = await library.thumbUrlFor(pano, 'wall')
+    expect(url).toContain('-wall880.webp')
+  })
+
   it('reuses the same URL for repeated requests', async () => {
     await writeJpeg('a.jpg', '2020:01:01 10:00:00')
     await library.open(photoDir)

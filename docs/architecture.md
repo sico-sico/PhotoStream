@@ -18,6 +18,7 @@
     - [EXIF 时区](#exif-时区)
     - [元数据缓存的作用域](#元数据缓存的作用域)
     - [缩小的下限由内容决定](#缩小的下限由内容决定)
+    - [全景图的 wall 档位由宽高比决定](#全景图的-wall-档位由宽高比决定)
     - [小图的 zoom 档位是冗余的](#小图的-zoom-档位是冗余的)
     - [缩略图缓存分片](#缩略图缓存分片)
     - [滚轮手势](#滚轮手势)
@@ -380,11 +381,30 @@ been built in: HEVC (a suitable decoder plugin is libde265)
 
 还有一个更隐蔽的坑：缩略图**请求集合**曾与**挂载集合**用了两套规则（一个用 `max(宽,高)` 作 margin 并按布局顺序，另一个用 900px 固定 margin 并按中心距离截断）。两者几乎不重叠，导致挂载的 600 个瓦片**全部无图**。现在两者都来自 `useWall` 里同一次 `cullItems` 调用，由构造保证一致。
 
+### 全景图的 wall 档位由宽高比决定
+
+`wall` 档位原本固定长边 512px。这个数字只对接近 1:1 的照片够用：墙面按照片自身的比例排布，而每种布局只固定**一个**方向——`grid` 固定行高 220px、`masonry` 固定列宽 260px、`square` 固定格子 200px——所以**另一个方向会随宽高比增长**。
+
+实测一张 14525×3798 的全景图：在 `grid` 里被排成 841×220，而缩略图只有 512×134，等于放大 1.64 倍；在 `square` 的 `cover` 下更糟。渲染出来的瓦片就是糊的。
+
+`wallRenditionEdge(width, height)` 解出布局实际绘制的长边（`a = 长/短`，按 `computeLayout` 的同一边界截断）：
+
+```
+横向：max(targetRowHeight × a, columnWidth)
+纵向：columnWidth × a
+```
+
+只有超过约 2:1（或 1:2）的照片才会突破 512px 下限，普通照片的档位不变。门槛是 `512 × 1.1`：刚好超一点的图不值得多一份更大的文件。尺寸来自扫描结果，`withoutEnlargement` 仍把源图作为上限。
+
+缓存 tag 随长边变化：普通照片仍是 `wall`（已有缓存继续有效），全景图是 `wall842`。若沿用 `wall`，已缓存的 512px 文件会永远命中，新的清晰版本反而永远不生成。
+
+实测同一张全景图（`grid` 行高 220）：梯度能量 16.08 → 20.94，理想参考值 21.57；文件 11.4 KB → 27.4 KB。放大倍率 1.64× → 1.00×。
+
 ### 小图的 zoom 档位是冗余的
 
-`buildThumbnail` 用 `withoutEnlargement`，所以原图小于 512px 时，`wall` 和 `zoom` 两档会编码出**同样的像素**，只是 WebP 质量不同。实测 300×200 的 JPEG：`wall` 200 B、`zoom` 192 B——两次编码、两个文件、一份信息。
+`buildThumbnail` 用 `withoutEnlargement`，所以原图小于对应的 `wall` 长边时，`wall` 和 `zoom` 两档会编码出**同样的像素**，只是 WebP 质量不同。实测 300×200 的 JPEG：`wall` 200 B、`zoom` 192 B——两次编码、两个文件、一份信息。
 
-`zoomTierAddsDetail(width, height)` 判定长边是否超过 `wall` 档位，`effectiveLevel` 据此把这类照片的 `zoom` 请求重定向到 `wall` 文件。尺寸来自扫描时已解析的 `photo.width/height`，不需要额外读文件。尺寸未知时保守保留独立文件：多一个文件只费磁盘，少一个会让瓦片永远模糊。
+`zoomTierAddsDetail(width, height)` 判定长边是否超过**这张照片实际会生成的** `wall` 长边（`wallRenditionEdge`，全景图会大于 512），`effectiveLevel` 据此把这类照片的 `zoom` 请求重定向到 `wall` 文件。尺寸来自扫描时已解析的 `photo.width/height`，不需要额外读文件。尺寸未知时保守保留独立文件：多一个文件只费磁盘，少一个会让瓦片永远模糊。
 
 ### 缩略图缓存分片
 
@@ -394,9 +414,11 @@ been built in: HEVC (a suitable decoder plugin is libde265)
 
 ```
 thumbs/a/b/<16位hash>-wall.webp
+thumbs/a/b/<16位hash>-wall842.webp
 thumbs/a/b/<16位hash>-viewer2048.webp
 ```
 
+- `wall<edge>` 只出现在全景图这类长边超过 512px 下限的照片上（见上一节）；普通照片仍是 `wall`。
 - `viewer<edge>` 的 `edge` 只会是 256 的倍数（`VIEWER_EDGE_BUCKET`），所以窗口尺寸变化不会让缓存无限增长；源图小于 `wall` 档位时这类请求直接复用 `wall` 文件，不额外编码。
 
 - **两级、每级 1 个十六进制字符**，共 256 个叶子目录。分片取自哈希本身，所以同一张照片永远落在同一个目录，查找仍是 O(1)。

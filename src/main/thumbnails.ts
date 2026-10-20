@@ -2,7 +2,7 @@ import sharp from 'sharp'
 import { mkdir, rename, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { ThumbLevel, ThumbPriority } from '../shared/types'
-import { THUMB_SIZES, thumbKey, zoomTierAddsDetail } from '../shared/thumbs'
+import { THUMB_SIZES, thumbKey, wallRenditionEdge, zoomTierAddsDetail } from '../shared/thumbs'
 
 /**
  * Thumbnail generation.
@@ -90,15 +90,26 @@ export function effectiveLevel(request: ThumbRequest): Exclude<ThumbLevel, 'full
  * `wall` is shared with the photo wall even when the viewer asks for a sized
  * rendition, because a source smaller than the wall size produces the same file
  * either way; generating a second one would be pure duplication.
+ *
+ * A panorama's wall rendition is larger than the 512px floor, so the edge is
+ * part of the tag (`wall842`). The alternatives would be worse: reusing `wall`
+ * would serve a cached 512px file and never rebuild the sharp one, and one
+ * shared tag for every size would make two differently sized encodings collide
+ * on one path.
  */
 export function renditionTag(request: ThumbRequest): string {
-  if (effectiveLevel(request) === 'wall') return 'wall'
+  if (effectiveLevel(request) === 'wall') {
+    const edge = renditionSize(request)
+    return edge === THUMB_SIZES.wall ? 'wall' : `wall${edge}`
+  }
   return request.maxEdge ? `viewer${request.maxEdge}` : 'zoom'
 }
 
 /** Long edge this request will be encoded at. */
 export function renditionSize(request: ThumbRequest): number {
-  if (effectiveLevel(request) === 'wall') return THUMB_SIZES.wall
+  if (effectiveLevel(request) === 'wall') {
+    return wallRenditionEdge(request.sourceWidth ?? 0, request.sourceHeight ?? 0)
+  }
   return request.maxEdge ?? THUMB_SIZES.zoom
 }
 
@@ -111,7 +122,8 @@ export function renditionQuality(request: ThumbRequest): number {
 /**
  * Absolute path of a rendition.
  *
- * `thumbKey` returns a sharded relative path (`a/b/hash-wall.webp`); `join`
+ * `thumbKey` returns a sharded relative path (`a/b/hash-wall.webp`, or
+ * `a/b/hash-wall842.webp` for a panorama whose wall rendition is wider); `join`
  * normalises the forward slashes to the platform separator. The directory is
  * created by `buildThumbnail`, not here, so this stays a pure function that
  * tests can call repeatedly.

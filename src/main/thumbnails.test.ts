@@ -145,6 +145,31 @@ describe('ensureThumbnail', () => {
     expect(metadata.width).toBe(200)
   })
 
+  it('sizes a panorama to the width the wall paints it', async () => {
+    // The bug this covers: a 4:1 photo was encoded 512x128 while the justified
+    // layout paints it 880x220, so the tile was upscaled by 1.7x and looked
+    // smeared. The rendition now carries the painted width.
+    await makeSource(6000, 1500)
+    const panorama: ThumbRequest = { ...request('wall'), sourceWidth: 6000, sourceHeight: 1500 }
+
+    expect(renditionSize(panorama)).toBe(880)
+    const file = await ensureThumbnail(cacheDir, panorama)
+    const metadata = await sharp(file).metadata()
+    expect(metadata.width).toBe(880)
+    expect(metadata.height).toBe(220)
+  })
+
+  it('caches a panorama separately from a standard photo', async () => {
+    // Same source file, two shapes: the tag has to carry the edge, or the
+    // second request would be served the first one's 512px file.
+    const panorama: ThumbRequest = { ...request('wall'), sourceWidth: 6000, sourceHeight: 1500 }
+    expect(thumbPath(cacheDir, panorama)).toMatch(/-wall880\.webp$/)
+    expect(thumbPath(cacheDir, panorama)).not.toBe(thumbPath(cacheDir, request('wall')))
+    // Ordinary shapes keep the plain tag, so their existing cache stays valid.
+    const standard: ThumbRequest = { ...request('wall'), sourceWidth: 1200, sourceHeight: 800 }
+    expect(thumbPath(cacheDir, standard)).toMatch(/-wall\.webp$/)
+  })
+
   it('flattens a transparent PNG onto white', async () => {
     // The wall presents photos as prints; a transparent PNG would otherwise
     // show the backdrop gradient through the picture, and the cached WebP would
