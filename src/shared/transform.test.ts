@@ -4,6 +4,7 @@ import {
   MAX_SCALE,
   MIN_FIT_SCALE,
   MIN_SCALE,
+  bucketScale,
   clampScale,
   clampViewerTransform,
   containSize,
@@ -23,6 +24,58 @@ import {
   zoomByWheel,
   zoomViewerAbout
 } from './transform'
+
+describe('bucketScale', () => {
+  it('leaves exactly-on-ladder values alone', () => {
+    const step = 1.05
+    for (const exponent of [-6, -3, 0, 3, 6]) {
+      const value = step ** exponent
+      expect(bucketScale(value, step)).toBeCloseTo(value, 10)
+    }
+  })
+
+  it('snaps to the nearest rung, up or down', () => {
+    const step = 1.05
+    const rung = step ** -4
+    // Just above and just below a rung both come back to it; both sides are
+    // within half a step, and a step is 5%.
+    expect(bucketScale(rung * 1.01, step)).toBeCloseTo(rung, 10)
+    expect(bucketScale(rung * 0.99, step)).toBeCloseTo(rung, 10)
+  })
+
+  it('is never more than half a step away', () => {
+    const step = 1.05
+    for (let scale = 0.05; scale <= 1; scale *= 1.013) {
+      const bucketed = bucketScale(scale, step)
+      expect(Math.abs(Math.log(bucketed / scale))).toBeLessThanOrEqual(Math.log(step) / 2 + 1e-9)
+    }
+  })
+
+  it('collapses a continuous gesture into far fewer values', () => {
+    // A pinch from 1 to 0.3 in 60 equal steps would re-flow the wall 60 times
+    // unrounded; bucketing has to bring that down substantially.
+    const scales = Array.from({ length: 60 }, (_, i) => 1 * (0.3 / 1) ** (i / 59))
+    const distinct = new Set(scales.map((scale) => bucketScale(scale).toFixed(6)))
+    expect(distinct.size).toBeLessThan(scales.length / 2)
+  })
+
+  it('is monotonic, so zooming out never appears to zoom back in', () => {
+    let previous = 0
+    for (let scale = 0.05; scale <= 2; scale *= 1.01) {
+      const bucketed = bucketScale(scale)
+      expect(bucketed).toBeGreaterThanOrEqual(previous)
+      previous = bucketed
+    }
+  })
+
+  it('passes through values it cannot bucket', () => {
+    // A caller feeding a zero or NaN must not get a broken width out of it.
+    expect(bucketScale(0)).toBe(0)
+    expect(bucketScale(-1)).toBe(-1)
+    expect(Number.isNaN(bucketScale(Number.NaN))).toBe(true)
+    expect(bucketScale(0.5, 1)).toBe(0.5)
+  })
+})
 
 describe('minScaleForWall', () => {
   it('is the scale at which the wall area exactly covers the window', () => {

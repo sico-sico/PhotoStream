@@ -34,6 +34,23 @@ async function writeJpeg(name: string, exifDate?: string): Promise<void> {
   await image.jpeg().toFile(join(photoDir, name))
 }
 
+/**
+ * Open something else, so the next `open(photoDir)` is not a re-open.
+ *
+ * Re-opening the folder that is already open now short-circuits (no scan, no
+ * seed), which is right for the user but leaves tests that want the *scanning*
+ * path with nothing to exercise.
+ */
+async function stepAway(): Promise<void> {
+  const other = await mkdtemp(join(tmpdir(), 'photostream-step-'))
+  try {
+    await library.open(other)
+    await library.drain()
+  } finally {
+    await rm(other, { recursive: true, force: true })
+  }
+}
+
 beforeEach(async () => {
   photoDir = await mkdtemp(join(tmpdir(), 'photostream-lib-'))
   cacheDir = await mkdtemp(join(tmpdir(), 'photostream-libcache-'))
@@ -244,6 +261,10 @@ describe('PhotoLibrary', () => {
       // photo set on every change, so piecewise delivery would flicker.
       await writeJpeg('a.jpg', '2020:01:01 10:00:00')
       await library.open(photoDir)
+      // Step away first: re-opening the folder that is already open no longer
+      // scans at all (see the short-circuit test), so there would be nothing to
+      // seed.
+      await stepAway()
       notices.length = 0
 
       await library.open(photoDir)
@@ -288,6 +309,7 @@ describe('PhotoLibrary', () => {
       // wall stays blank until the scan finishes.
       await writeJpeg('a.jpg', '2020:01:01 10:00:00')
       await library.open(photoDir)
+      await stepAway()
       notices.length = 0
 
       const photo = join(photoDir, 'a.jpg')
@@ -295,6 +317,54 @@ describe('PhotoLibrary', () => {
       const seed = notices.find((notice) => notice.channel === IPC.scanSeed)
       expect(seed).toBeDefined()
       expect((seed!.payload as { dir: string }).dir).toBe(photo)
+    })
+
+    it('answers a re-open of the same folder without scanning it again', async () => {
+      // The history menu and a repeated picker choice both land here. A full
+      // scan of 40 000 photos costs ~700 ms of `stat` calls even with every
+      // metadata row cached, for an answer the watcher already maintains.
+      await writeJpeg('a.jpg', '2020:01:01 10:00:00')
+      const first = await library.open(photoDir)
+      await library.drain()
+      notices.length = 0
+
+      const again = await library.open(photoDir)
+      // The very same array: nothing was read, so nothing can have changed.
+      expect(again.photos).toBe(first.photos)
+      expect(again.durationMs).toBe(0)
+      // ...and the background re-check found no difference, so the wall is not
+      // asked to re-render.
+      await library.drain()
+      expect(notices.filter((notice) => notice.channel === IPC.scanSeed)).toEqual([])
+      expect(notices.filter((notice) => notice.channel === IPC.photosChanged)).toEqual([])
+    })
+
+    it('reports a replacement when a re-open finds the folder changed', async () => {
+      // The watcher normally sees this first, so what is pinned here is the
+      // end state either way: a file that appeared while the folder was open is
+      // on the wall after re-opening it.
+      await writeJpeg('a.jpg', '2020:01:01 10:00:00')
+      await library.open(photoDir)
+      await library.drain()
+
+      await writeJpeg('b.jpg', '2021:02:02 10:00:00')
+      await library.open(photoDir)
+      await waitFor(() => library.all.length === 2)
+
+      expect(library.all.map((photo) => photo.name).sort()).toEqual(['a.jpg', 'b.jpg'])
+    })
+
+    it('scans again when the recursion setting changed', async () => {
+      // Same folder, different mode: the short-circuit must not answer with a
+      // list built under the other mode.
+      await mkdir(join(photoDir, 'sub'))
+      await writeJpeg('a.jpg', '2020:01:01 10:00:00')
+      const flat = await library.open(photoDir)
+      expect(flat.photos).toHaveLength(1)
+
+      const nested = await library.open(photoDir, { recursive: true })
+      expect(nested.photos).toBe(library.all)
+      expect(library.all).toHaveLength(1)
     })
 
     it('does not re-send the cache once the prefetch has finished', async () => {

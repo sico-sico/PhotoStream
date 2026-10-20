@@ -4,11 +4,31 @@ import { DEFAULT_SETTINGS, DEFAULT_SORT } from '@shared/types'
 import { applyFilters } from '@shared/filters'
 import { computeLayout } from '@shared/layout'
 import { pickThumbLevel, REFERENCE_TILE } from '@shared/thumbs'
-import { clampWallTransform, fitWallTransform, minScaleForTiles, minScaleForWall, type Transform } from '@shared/transform'
+import { clampWallTransform, bucketScale, fitWallTransform, minScaleForTiles, minScaleForWall, type Transform } from '@shared/transform'
 import { MAX_MOUNTED_TILES } from '@shared/cull'
 import { reanchorTransform } from '@shared/reanchor'
 import { CULL_MARGIN, cullItems, prefetchIdsForScroll, type CullResult } from '@shared/cull'
 import { INITIAL_STATE, reducer } from '../state/wallReducer'
+import { useDebouncedValue } from './useDebouncedValue'
+
+/**
+ * How long a filter edit waits before the wall is re-derived.
+ *
+ * One filter pass costs ~32 ms on 40 000 photos (filter, base layout, the
+ * zoom-out floor's bisection, wall layout), which is longer than the gap between
+ * keystrokes: without a pause the input itself stutters. 120 ms is below the
+ * point where the result feels detached from the typing, and long enough to
+ * coalesce a whole word.
+ */
+const FILTER_DEBOUNCE_MS = 120
+
+/**
+ * Grid the window size is rounded to before the zoom-out floor is computed.
+ *
+ * See `floorViewport` in `useWall`: this exists so dragging a window edge does
+ * not pay for the floor on every frame.
+ */
+const FLOOR_VIEWPORT_BUCKET = 64
 
 /**
  * How many destination tiles to prefetch for a scrollbar jump.
@@ -171,7 +191,45 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
   const viewportRef = useRef(viewport)
   viewportRef.current = viewport
 
-  const visiblePhotos = useMemo(() => applyFilters(state.photos, state.filters), [state.photos, state.filters])
+  /**
+   * Filters, delayed until they stop changing.
+   *
+   * Every filter change re-runs the whole derivation: `applyFilters`, the base
+   * layout, the zoom-out floor (which re-lays out the entire library up to
+   * nine times) and the wall layout. Measured on 40 000 photos that is ~32 ms,
+   * so a fast typist kept the main thread busy enough to make the input itself
+   * lag. The panel is still controlled by `state.filters`, so what is on screen
+   * updates on every keystroke; only the derived wall waits.
+   */
+  const settledFilters = useDebouncedValue(state.filters, FILTER_DEBOUNCE_MS)
+  const visiblePhotos = useMemo(
+    () => applyFilters(state.photos, settledFilters),
+    [state.photos, settledFilters]
+  )
+
+  /**
+   * The viewport, quantised, for everything that only needs to be roughly right.
+   *
+   * The zoom-out floor costs ~32 ms on 40 000 photos because it bisects by
+   * laying the whole library out. Its inputs are the layout width and the
+   * window size, so dragging a window edge — which changes the width on every
+   * frame — recomputed it continuously. Bucketing to 64 px means a drag pays it
+   * once every 64 px instead, and being up to 64 px off changes the floor by
+   * about 2%, which nothing can perceive.
+   *
+   * Rounded *up*, not to nearest: the count this feeds is a cap, and rounding
+   * the cull rectangle down would undercount the visible tiles and let the
+   * floor through too low — the bug that dropped 600 of 2332 tiles. Being 64 px
+   * too generous only costs a hair of zoom-out range.
+   *
+   * The exact width still drives `layoutWidth` below: the rows break where the
+   * window actually ends.
+   */
+  const floorViewport = useMemo(() => {
+    const bucket = (value: number, minimum: number): number =>
+      Math.max(minimum, Math.ceil(value / FLOOR_VIEWPORT_BUCKET) * FLOOR_VIEWPORT_BUCKET)
+    return { width: bucket(viewport.width, 320), height: bucket(viewport.height, 1) }
+  }, [viewport.width, viewport.height])
 
   /**
    * The wall laid out for a plain window, with no zoom compensation.
@@ -183,8 +241,12 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
    * scale, the layout width and the floor.
    */
   const baseLayout = useMemo(
-    () => computeLayout(visiblePhotos, { mode: state.layout, containerWidth: Math.max(320, viewport.width) }),
-    [visiblePhotos, state.layout, viewport.width]
+    () =>
+      computeLayout(visiblePhotos, {
+        mode: state.layout,
+        containerWidth: floorViewport.width
+      }),
+    [visiblePhotos, state.layout, floorViewport.width]
   )
 
   /**
@@ -202,7 +264,12 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
    * the zoom-compensated `layoutWidth` below.
    */
   const minScale = useMemo(() => {
-    const areaFloor = minScaleForWall(baseLayout.width, baseLayout.height, viewport.width, viewport.height)
+    const areaFloor = minScaleForWall(
+      baseLayout.width,
+      baseLayout.height,
+      floorViewport.width,
+      floorViewport.height
+    )
     // Measured with the *same* margin the wall mounts with. Using zero here
     // undercounted by roughly a third and let the floor through too low, so the
     // cap still bit: 600 of 2332 visible tiles were dropped at 0.2271.
@@ -210,16 +277,16 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
       cullItems(
         computeLayout(visiblePhotos, {
           mode: state.layout,
-          containerWidth: Math.round(Math.max(320, viewport.width) / scale)
+          containerWidth: Math.round(floorViewport.width / scale)
         }),
         { scale, x: 0, y: 0 },
-        viewport.width,
-        viewport.height,
+        floorViewport.width,
+        floorViewport.height,
         CULL_MARGIN,
         Number.MAX_SAFE_INTEGER
       ).items.length
     return minScaleForTiles(visibleAt, MAX_MOUNTED_TILES, areaFloor)
-  }, [baseLayout.height, baseLayout.width, visiblePhotos, state.layout, viewport.height, viewport.width])
+  }, [baseLayout.height, baseLayout.width, visiblePhotos, state.layout, floorViewport.width, floorViewport.height])
 
   /**
    * Width the wall is laid out for, in world units.
@@ -240,7 +307,11 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
     const base = Math.max(320, viewport.width)
     const effective = Math.max(transform.scale, minScale)
     if (!(effective < 1)) return base
-    return Math.round(base / effective)
+    // Bucketed so a continuous zoom does not re-flow the wall (and re-render
+    // every mounted tile) on every wheel event; see `bucketScale`. Clamped back
+    // to `minScale`, because rounding *up* would widen past the floor.
+    const bucketed = Math.max(bucketScale(effective), minScale)
+    return Math.round(base / bucketed)
   }, [transform.scale, minScale, viewport.width])
 
   // The wall spans the width it is laid out for, so rows break at the window edge.

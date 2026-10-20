@@ -15,6 +15,7 @@ import { join } from 'node:path'
 import { readImageMetadata, readFullExif } from '../../src/main/metadata'
 import { MetadataCache, type CacheWrite } from '../../src/main/metadata-cache'
 import { listImageFiles, scanDirectory } from '../../src/main/scanner'
+import { PhotoLibrary } from '../../src/main/ipc'
 import { ensureThumbnail, thumbPath, type ThumbRequest } from '../../src/main/thumbnails'
 import { computeLayout } from '../../src/shared/layout'
 import { sortPhotos } from '../../src/shared/photoStore'
@@ -414,6 +415,31 @@ export function headlessCases(fixtures: BenchFixtures): CaseDefinition[] {
         try {
           return await elapsed(() => scanDirectory(context.large, { recursive: true, cache }))
         } finally {
+          cache.close()
+        }
+      }
+    },
+
+    {
+      id: 'open.reopen.4000',
+      title: 'open the folder that is already open',
+      unit: 'ms',
+      samples: 7,
+      budget: 20,
+      // The short-circuit in `PhotoLibrary.open`: re-opening the current folder
+      // answers from the list the watcher maintains. Without it this is a full
+      // scan (~70 ms here, ~700 ms for 40 000 photos), which is why the budget
+      // is set at a fifth of that — a removed short-circuit fails loudly.
+      run: async (context) => {
+        const cache = new MetadataCache(join(context.scratch, 'reopen.db'))
+        const library = new PhotoLibrary(join(context.scratch, 'reopen-thumbs'), () => {}, cache)
+        try {
+          await library.open(context.fixtures.lib4000, { recursive: true })
+          await library.drain()
+          return await elapsed(() => library.open(context.fixtures.lib4000, { recursive: true }))
+        } finally {
+          library.close()
+          await library.drain()
           cache.close()
         }
       }

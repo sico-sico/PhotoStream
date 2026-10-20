@@ -519,7 +519,10 @@ describe('useWall', () => {
         hook.result.current.setFilters({ from: '', to: '', text: 'kyoto' })
       })
 
-      expect(hook.result.current.visiblePhotos.map((p) => p.id)).toEqual(['a'])
+      // The wall derivation is debounced (one pass can cost ~32 ms on a large
+      // library), so the input updates immediately and the filter lands shortly
+      // after.
+      await waitFor(() => expect(hook.result.current.visiblePhotos.map((p) => p.id)).toEqual(['a']))
       // The full collection is retained so clearing the filter restores it.
       expect(hook.result.current.state.photos).toHaveLength(2)
     })
@@ -543,12 +546,12 @@ describe('useWall', () => {
       act(() => {
         hook.result.current.setFilters({ from: '', to: '', text: 'kyoto' })
       })
-      expect(hook.result.current.visiblePhotos).toHaveLength(1)
+      await waitFor(() => expect(hook.result.current.visiblePhotos).toHaveLength(1))
 
       act(() => {
         hook.result.current.resetFilters()
       })
-      expect(hook.result.current.visiblePhotos).toHaveLength(2)
+      await waitFor(() => expect(hook.result.current.visiblePhotos).toHaveLength(2))
     })
 
     it('exposes the selected photo', async () => {

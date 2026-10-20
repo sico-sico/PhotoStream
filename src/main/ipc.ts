@@ -70,6 +70,17 @@ export class PhotoLibrary {
   /** A scan started before the renderer asked; adopted by the matching `open`. */
   private prefetched: PrefetchedScan | null = null
 
+  /**
+   * Background re-checks of the folder that is already open.
+   *
+   * Started by `open` when it short-circuits, aborted by `claim` so they never
+   * race the scan for a folder the user has actually asked for.
+   */
+  private readonly revalidations = new Set<AbortController>()
+
+  /** In-flight re-checks, so `drain` can wait for them. */
+  private readonly revalidationJobs = new Set<Promise<void>>()
+
   constructor(
     readonly thumbCacheDir: string,
     private readonly notify: (channel: string, payload: unknown) => void,
@@ -116,6 +127,11 @@ export class PhotoLibrary {
     // A new claim supersedes any speculative scan: either the user has asked for
     // another folder, or this claim belongs to the prefetch itself.
     this.prefetched = null
+    // Background re-checks describe the folder that was open a moment ago, so
+    // they are pointless once a different one is being opened — and they would
+    // compete for the disk with the scan that matters.
+    for (const controller of this.revalidations) controller.abort()
+    this.revalidations.clear()
     this.scanning?.abort()
     const controller = new AbortController()
     this.scanning = controller
@@ -211,6 +227,37 @@ export class PhotoLibrary {
     } = {}
   ): Promise<ScanResult> {
     const recursive = options.recursive === true
+
+    /*
+     * Re-opening the folder that is already open.
+     *
+     * The history menu, a repeated picker choice and "open the same album
+     * again" all land here, and a full scan of 40 000 photos costs ~700 ms of
+     * `stat` calls even with every metadata row cached — for a result the
+     * watcher has been keeping current the whole time.
+     *
+     * What the renderer gets is the list it already has, so nothing visibly
+     * happens, which is the correct outcome. The folder is still re-checked in
+     * the background (`revalidate`) and a real difference is pushed as a
+     * replacement, so a file added while the watcher was not looking still
+     * appears.
+     *
+     * Only for a plain open: a drop passes a generation because it also has to
+     * focus the photo, and a folder that is still being scanned has no settled
+     * answer to hand back.
+     */
+    if (
+      options.generation === undefined &&
+      this.scanning === null &&
+      this.watcher !== null &&
+      this.photos.length > 0 &&
+      this.dir === resolve(dir) &&
+      this.recursive === recursive
+    ) {
+      this.startRevalidate()
+      return { dir: this.dir, photos: this.photos, skipped: 0, durationMs: 0 }
+    }
+
     // A startup prefetch for this exact folder and mode is already reading it;
     // awaiting that instead of claiming would abort it and pay for the files
     // twice.
@@ -286,6 +333,54 @@ export class PhotoLibrary {
   close(): void {
     this.watcher?.close()
     this.watcher = null
+  }
+
+  /**
+   * Re-check the open folder in the background, and report only a real change.
+   *
+   * The wall is already showing this folder, so silence is the common and
+   * correct outcome: nothing re-renders, nothing re-anchors, the view stays
+   * exactly where the user left it. A difference is pushed as the full array
+   * (`photos/delta` replaces rather than merges), which is the same shape the
+   * watcher uses after a burst of events.
+   */
+  private async revalidate(): Promise<void> {
+    const dir = this.dir
+    const recursive = this.recursive
+    const generation = this.generation
+    const controller = new AbortController()
+    this.revalidations.add(controller)
+    try {
+      const scanned = await scanDirectory(dir, {
+        cache: this.metadataCache,
+        recursive,
+        signal: controller.signal
+      })
+      // The user may have opened something else, or toggled recursion, while
+      // this ran. Applying the result then would replace a newer wall.
+      if (generation !== this.generation || this.dir !== dir) return
+      if (samePhotos(this.photos, scanned.photos)) return
+      this.photos = scanned.photos
+      this.notify(IPC.photosChanged, { kind: 'delta', photos: this.photos })
+    } catch {
+      // A re-check is an optimisation over what the watcher already reported;
+      // failing to run it must never surface as an error.
+    } finally {
+      this.revalidations.delete(controller)
+    }
+  }
+
+  /**
+   * Run `revalidate` and keep the promise, so `drain` can wait for it.
+   *
+   * Without this, "did the re-check change anything?" would only be answerable
+   * with a timeout, which makes the test that guards against a pointless
+   * replacement order-dependent.
+   */
+  private startRevalidate(): void {
+    const job = this.revalidate()
+    this.revalidationJobs.add(job)
+    void job.finally(() => this.revalidationJobs.delete(job))
   }
 
   /**
@@ -373,6 +468,11 @@ export class PhotoLibrary {
    */
   async drain(): Promise<void> {
     await this.thumbQueue.catch(() => undefined)
+    // Re-checks started by a same-folder re-open also read the disk, so a test
+    // that tears its temporary directory down has to wait for them too.
+    while (this.revalidationJobs.size > 0) {
+      await Promise.allSettled([...this.revalidationJobs])
+    }
   }
 
   /**
@@ -477,6 +577,12 @@ export class PhotoLibrary {
       },
       onError: (error) => {
         if (generation !== this.generation) return
+        // A failed watch is dead, not degraded: it will not deliver another
+        // event. Clearing it is what turns the next re-open of this folder into
+        // a real scan — without that, re-opening a folder whose watch had failed
+        // would keep answering from a list that can no longer be kept current.
+        this.watcher?.close()
+        this.watcher = null
         this.notify(IPC.photosChanged, { kind: 'error', message: error.message })
       }
     })
@@ -528,6 +634,33 @@ export class PhotoLibrary {
     // and the `pic://thumb` handler resolves the path against the cache root.
     return thumbUrl(relativeTo(this.thumbCacheDir, file))
   }
+}
+
+/**
+ * Whether two scans produced the same library.
+ *
+ * Compares what the wall and the cache actually depend on, and nothing else:
+ * `mtimeMs` + `sizeBytes` are the cache's identity for a file, and the rest is
+ * what a tile and its sort order are built from. Both arrays come from
+ * `scanDirectory`, so they are already in the same order.
+ */
+function samePhotos(a: readonly Photo[], b: readonly Photo[]): boolean {
+  if (a.length !== b.length) return false
+  for (let index = 0; index < a.length; index++) {
+    const left = a[index]
+    const right = b[index]
+    if (
+      left.id !== right.id ||
+      left.mtimeMs !== right.mtimeMs ||
+      left.sizeBytes !== right.sizeBytes ||
+      left.takenAt !== right.takenAt ||
+      left.width !== right.width ||
+      left.height !== right.height
+    ) {
+      return false
+    }
+  }
+  return true
 }
 
 function toThumbRequest(
