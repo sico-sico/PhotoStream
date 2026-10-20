@@ -795,6 +795,35 @@ describe('useWall', () => {
       expect(saved.layout).toBe('masonry')
     })
 
+    it('restores the cache budget', async () => {
+      installApi({ cacheBudgetMb: 4096 })
+      const { result } = renderHook(() => useWall(viewport))
+      await waitFor(() => expect(result.current.state.cacheBudgetMb).toBe(4096))
+    })
+
+    it('saves a cache limit, including the unlimited value', async () => {
+      const { result } = renderHook(() => useWall(viewport))
+      await waitFor(() => expect(api.loadSettings).toHaveBeenCalled())
+
+      act(() => {
+        result.current.setCacheBudgetMb(2048)
+      })
+      await waitFor(() => {
+        const saved = api.saveSettings.mock.calls.at(-1)?.[0] as Settings | undefined
+        expect(saved?.cacheBudgetMb).toBe(2048)
+      })
+
+      // `0` has to reach the file as itself; dropping it as falsy would turn
+      // "unlimited" back into whatever default the writer applies.
+      act(() => {
+        result.current.setCacheBudgetMb(0)
+      })
+      await waitFor(() => {
+        const saved = api.saveSettings.mock.calls.at(-1)?.[0] as Settings | undefined
+        expect(saved?.cacheBudgetMb).toBe(0)
+      })
+    })
+
     it('saves the locale change', async () => {
       const { result } = renderHook(() => useWall(viewport))
       await waitFor(() => expect(api.loadSettings).toHaveBeenCalled())

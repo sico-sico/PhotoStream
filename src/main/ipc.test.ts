@@ -104,7 +104,7 @@ describe('PhotoLibrary', () => {
 
     const url = await library.thumbUrlFor(library.all[0], 'wall')
     expect(url.startsWith('pic://thumb/')).toBe(true)
-    expect(url).toContain('-wall.webp')
+    expect(url).toContain('-wall512q78p1.webp')
   })
 
   it('sizes a panorama from the dimensions the scan parsed', async () => {
@@ -118,7 +118,7 @@ describe('PhotoLibrary', () => {
 
     const pano = library.all.find((photo) => photo.name === 'pano.jpg')!
     const url = await library.thumbUrlFor(pano, 'wall')
-    expect(url).toContain('-wall880.webp')
+    expect(url).toContain('-wall880q78p1.webp')
   })
 
   it('reuses the same URL for repeated requests', async () => {

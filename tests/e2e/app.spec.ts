@@ -105,7 +105,7 @@ test.afterAll(async () => {
  */
 async function chooseLanguage(id: string): Promise<void> {
   await page.locator('.menu-trigger').click()
-  await page.locator('.settings-menu select').selectOption(id)
+  await page.locator('.settings-language').selectOption(id)
   // Selecting closes the menu, which also keeps later clicks unobstructed.
   await expect(page.locator('.menu-panel')).toHaveCount(0)
 }
@@ -116,7 +116,7 @@ async function useEnglish(): Promise<void> {
   // the next lookup time out. Open it only when it is actually closed.
   if ((await page.locator('.settings-menu').count()) === 0) await page.locator('.menu-trigger').click()
 
-  const picker = page.locator('.settings-menu select')
+  const picker = page.locator('.settings-language')
   await expect(picker).toBeVisible()
   const current = await picker.inputValue()
   // Escape rather than select when nothing needs changing, so the state is left
@@ -943,7 +943,7 @@ test('persists the chosen layout and language across a restart', async () => {
   // The language now lives behind the gear, so the value is checked after
   // opening it; the button label is already French, which proves it was restored.
   await page.locator('.menu-trigger').click()
-  await expect(page.locator('.settings-menu select')).toHaveValue('fr')
+  await expect(page.locator('.settings-language')).toHaveValue('fr')
 })
 
 test('opens the About dialog from the gear menu', async () => {
@@ -1509,7 +1509,7 @@ test('serves a sharp rendition at fit and the full original when zoomed, for a n
     // Chromium downscaling a 4000px JPEG is what reads as blurry next to the
     // system viewer, and a rendition that is too large is downscaled a second
     // time during paint, which is just as soft.
-    await expect(image).toHaveAttribute('src', /^pic:\/\/thumb\/.*-viewer\d+\.webp$/)
+    await expect(image).toHaveAttribute('src', /^pic:\/\/thumb\/.*-viewer\d+q85p1\.webp$/)
     await expect
       .poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth), { timeout: 10_000 })
       .toBeGreaterThan(512)
@@ -1589,7 +1589,7 @@ test('shows a transparent PNG on white and dates it from the file', async () => 
     const src = await page.locator('[data-photo-id] img').first().getAttribute('src')
     const relative = (src ?? '').replace('pic://thumb/', '').split('/').map(decodeURIComponent)
     const cached = join(dataDir(), 'thumbs', ...relative)
-    expect(cached).toMatch(/-wall\.webp$/)
+    expect(cached).toMatch(/-wall\d*q78p1\.webp$/)
 
     // Read into memory rather than handing the path to sharp: libvips keeps the
     // file mapped, and on Windows that makes the cache directory undeletable

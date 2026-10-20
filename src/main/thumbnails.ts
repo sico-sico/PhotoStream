@@ -1,8 +1,16 @@
-import sharp from 'sharp'
 import { mkdir, rename, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { ThumbLevel, ThumbPriority } from '../shared/types'
-import { THUMB_SIZES, thumbKey, wallRenditionEdge, zoomTierAddsDetail } from '../shared/thumbs'
+import { loadSharp } from './sharp-loader'
+import {
+  THUMB_QUALITY,
+  THUMB_SIZES,
+  renditionCacheTag,
+  thumbKey,
+  wallRenditionEdge,
+  zoomTierAddsDetail,
+  type RenditionKind
+} from '../shared/thumbs'
 
 /**
  * Thumbnail generation.
@@ -16,35 +24,7 @@ import { THUMB_SIZES, thumbKey, wallRenditionEdge, zoomTierAddsDetail } from '..
  * increasing peak memory.
  */
 
-/**
- * libvips caches decoded images and keeps the source file mapped, which on
- * Windows leaves the photo locked until the process exits. That breaks a core
- * workflow: re-exporting a photo from Lightroom over the same file name fails
- * with "unable to open for write" while the wall is open. Verified on Windows:
- * every `sharp()` option combination held the lock, and disabling the cache was
- * the only thing that released it.
- *
- * The cost is re-reading a JPEG instead of reusing a cached decode, which is
- * negligible here because each source is read once per rendition key, and the
- * on-disk thumbnail cache already prevents repeat work.
- */
-sharp.cache(false)
-
 export const THUMB_CONCURRENCY = 4
-
-export const THUMB_QUALITY = { wall: 78, zoom: 82 } as const
-
-/**
- * Quality for a display-sized rendition.
- *
- * Higher than `zoom` because it is the tier a single photo is read at, and
- * because a sized rendition is already the final one: unlike `zoom` it will not
- * be downscaled again by the browser, so any artefact it carries stays visible.
- * Measured at 1840 px on a real photo, quality 82 and quality 95 differ by 0.6%
- * in gradient energy, so this is a modest bump rather than a lever.
- */
-export const VIEWER_QUALITY = 85
-
 export interface ThumbRequest {
   sourcePath: string
   mtimeMs: number
@@ -87,22 +67,23 @@ export function effectiveLevel(request: ThumbRequest): Exclude<ThumbLevel, 'full
 /**
  * Cache tag for a request: what distinguishes one rendition from another.
  *
+ * The tag names everything that determines the bytes — family, edge, WebP
+ * quality and pipeline revision — so a filename alone is enough to decide
+ * whether a cached file is still usable. That is what lets the sweeper work
+ * without a manifest.
+ *
  * `wall` is shared with the photo wall even when the viewer asks for a sized
  * rendition, because a source smaller than the wall size produces the same file
  * either way; generating a second one would be pure duplication.
- *
- * A panorama's wall rendition is larger than the 512px floor, so the edge is
- * part of the tag (`wall842`). The alternatives would be worse: reusing `wall`
- * would serve a cached 512px file and never rebuild the sharp one, and one
- * shared tag for every size would make two differently sized encodings collide
- * on one path.
  */
 export function renditionTag(request: ThumbRequest): string {
-  if (effectiveLevel(request) === 'wall') {
-    const edge = renditionSize(request)
-    return edge === THUMB_SIZES.wall ? 'wall' : `wall${edge}`
-  }
-  return request.maxEdge ? `viewer${request.maxEdge}` : 'zoom'
+  return renditionCacheTag(renditionKind(request), renditionSize(request), renditionQuality(request))
+}
+
+/** Which family of rendition this request produces. */
+function renditionKind(request: ThumbRequest): RenditionKind {
+  if (effectiveLevel(request) === 'wall') return 'wall'
+  return request.maxEdge ? 'viewer' : 'zoom'
 }
 
 /** Long edge this request will be encoded at. */
@@ -116,16 +97,15 @@ export function renditionSize(request: ThumbRequest): number {
 /** WebP quality this request will be encoded at. */
 export function renditionQuality(request: ThumbRequest): number {
   if (effectiveLevel(request) === 'wall') return THUMB_QUALITY.wall
-  return request.maxEdge ? VIEWER_QUALITY : THUMB_QUALITY.zoom
+  return request.maxEdge ? THUMB_QUALITY.viewer : THUMB_QUALITY.zoom
 }
 
 /**
  * Absolute path of a rendition.
  *
- * `thumbKey` returns a sharded relative path (`a/b/hash-wall.webp`, or
- * `a/b/hash-wall842.webp` for a panorama whose wall rendition is wider); `join`
- * normalises the forward slashes to the platform separator. The directory is
- * created by `buildThumbnail`, not here, so this stays a pure function that
+ * `thumbKey` returns a sharded relative path (`a/b/hash-wall842q78p1.webp`);
+ * `join` normalises the forward slashes to the platform separator. The directory
+ * is created by `buildThumbnail`, not here, so this stays a pure function that
  * tests can call repeatedly.
  */
 export function thumbPath(cacheDir: string, request: ThumbRequest): string {
@@ -208,11 +188,16 @@ function release(): void {
  * Ensure a thumbnail exists on disk and return its path.
  * Writes to a temporary name first so a crash mid-encode cannot leave a
  * half-written file that later looks like a cache hit.
+ *
+ * `onWritten` reports the size of a file this call actually encoded. Cache
+ * bookkeeping uses it to keep an approximate total without re-statting the
+ * directory after every tile.
  */
 export async function ensureThumbnail(
   cacheDir: string,
   request: ThumbRequest,
-  priority: ThumbPriority = 'interactive'
+  priority: ThumbPriority = 'interactive',
+  onWritten?: (bytes: number) => void
 ): Promise<string> {
   const target = thumbPath(cacheDir, request)
   if (await exists(target)) return target
@@ -220,23 +205,32 @@ export async function ensureThumbnail(
   const pending = inFlight.get(target)
   if (pending) return pending
 
-  const job = encodeWithLimit(target, request, priority).finally(() => {
+  const job = encodeWithLimit(target, request, priority, onWritten).finally(() => {
     inFlight.delete(target)
   })
   inFlight.set(target, job)
   return job
 }
 
-async function encodeWithLimit(target: string, request: ThumbRequest, priority: ThumbPriority): Promise<string> {
+async function encodeWithLimit(
+  target: string,
+  request: ThumbRequest,
+  priority: ThumbPriority,
+  onWritten?: (bytes: number) => void
+): Promise<string> {
   await acquire(priority)
   try {
-    return await buildThumbnail(target, request)
+    return await buildThumbnail(target, request, onWritten)
   } finally {
     release()
   }
 }
 
-async function buildThumbnail(target: string, request: ThumbRequest): Promise<string> {
+async function buildThumbnail(
+  target: string,
+  request: ThumbRequest,
+  onWritten?: (bytes: number) => void
+): Promise<string> {
   // Re-check: a concurrent caller may have finished while this one waited.
   if (await exists(target)) return target
 
@@ -248,7 +242,8 @@ async function buildThumbnail(target: string, request: ThumbRequest): Promise<st
   const temp = `${target}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`
 
   try {
-    await sharp(request.sourcePath, { sequentialRead: true, failOn: 'none' })
+    const sharp = await loadSharp()
+    const written = await sharp(request.sourcePath, { sequentialRead: true, failOn: 'none' })
       // Honour EXIF orientation even though these exports are already baked.
       .rotate()
       .resize({ width: size, height: size, fit: 'inside', withoutEnlargement: true })
@@ -270,6 +265,7 @@ async function buildThumbnail(target: string, request: ThumbRequest): Promise<st
       .webp({ quality, effort: 4 })
       .toFile(temp)
     await rename(temp, target)
+    onWritten?.(written.size)
     return target
   } catch (error) {
     await rm(temp, { force: true }).catch(() => undefined)
@@ -290,6 +286,8 @@ export async function ensureThumbnails(
     signal?: AbortSignal
     /** `background` for speculative work such as scroll prefetching. */
     priority?: ThumbPriority
+    /** Called with the size of each file this run actually encoded. */
+    onWritten?: (bytes: number) => void
   } = {}
 ): Promise<{ built: number; failed: number }> {
   const concurrency = Math.max(1, options.concurrency ?? THUMB_CONCURRENCY)
@@ -306,7 +304,7 @@ export async function ensureThumbnails(
       cursor += 1
       if (index >= total || options.signal?.aborted) return
       try {
-        await ensureThumbnail(cacheDir, requests[index], priority)
+        await ensureThumbnail(cacheDir, requests[index], priority, options.onWritten)
         built += 1
       } catch {
         failed += 1

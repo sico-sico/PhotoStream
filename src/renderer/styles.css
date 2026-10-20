@@ -771,6 +771,19 @@ body {
   cursor: pointer;
 }
 
+/*
+ * Secondary text under a control: the cache's current usage, or the note that
+ * "no limit" means unbounded growth. Quiet enough not to compete with the
+ * controls it explains, but present rather than hidden in a tooltip, because
+ * these are the numbers a user opens this menu to see.
+ */
+.settings-note {
+  margin: -4px 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-dim);
+}
+
 /* A row in the menu that opens something else rather than holding a value. */
 .settings-action {
   justify-content: flex-start;

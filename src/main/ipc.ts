@@ -1,7 +1,7 @@
 import { ipcMain, dialog, shell, BrowserWindow } from 'electron'
 import { stat } from 'node:fs/promises'
 import { basename, relative as relativePath, sep } from 'node:path'
-import type { AppInfo, Photo, ScanResult, Settings, ThumbLevel } from '../shared/types'
+import type { AppInfo, CacheStats, Photo, ScanResult, Settings, ThumbLevel } from '../shared/types'
 import { IPC } from '../shared/ipc'
 import { scanDirectory } from './scanner'
 import { resolveOpenTarget } from './drop'
@@ -15,6 +15,7 @@ import { resolvePhotoDate } from '../shared/date'
 import { findPhoto, removePhoto, sortPhotos, upsertPhoto } from '../shared/photoStore'
 import { readImageMetadata, readFullExif } from './metadata'
 import type { MetadataCache } from './metadata-cache'
+import type { ThumbCache } from './cache-maintenance'
 import type { RawExif } from '../shared/exif'
 import { locales } from '../shared/i18n'
 
@@ -47,7 +48,15 @@ export class PhotoLibrary {
     readonly thumbCacheDir: string,
     private readonly notify: (channel: string, payload: unknown) => void,
     /** Cache of parsed EXIF, keyed by path + mtime + size. */
-    readonly metadataCache?: MetadataCache
+    readonly metadataCache?: MetadataCache,
+    /**
+     * Called with the byte size of each rendition this library encodes.
+     *
+     * The cache's running total is kept from this rather than from a directory
+     * walk per tile: the encoder already knows the size, and re-statting the
+     * cache root after every thumbnail would cost more than the encode.
+     */
+    private readonly onThumbWritten?: (bytes: number) => void
   ) {}
 
   get directory(): string {
@@ -268,7 +277,8 @@ export class PhotoLibrary {
     const requests = photos.map((photo) => toThumbRequest(photo, level))
     this.thumbQueue = this.thumbQueue.then(() =>
       ensureThumbnails(this.thumbCacheDir, requests, {
-        onDone: (done, total) => this.notify(IPC.thumbProgress, { done, total })
+        onDone: (done, total) => this.notify(IPC.thumbProgress, { done, total }),
+        onWritten: this.onThumbWritten
       })
     )
   }
@@ -295,7 +305,8 @@ export class PhotoLibrary {
     const file = await ensureThumbnail(
       this.thumbCacheDir,
       toThumbRequest(photo, level, maxEdge),
-      priority
+      priority,
+      this.onThumbWritten
     )
     // Relative, not `basename`: the cache is sharded into `a/b/` subdirectories,
     // and the `pic://thumb` handler resolves the path against the cache root.
@@ -341,6 +352,8 @@ export function relativeTo(root: string, target: string): string {
 export interface IpcDeps {
   library: PhotoLibrary
   dataDir: string
+  /** Disk bookkeeping for the thumbnail cache. */
+  cache: ThumbCache
   appVersion: string
   /** Electron and Chromium versions, for the About dialog. */
   versions: { electron: string; chromium: string }
@@ -402,7 +415,17 @@ export function registerIpc(deps: IpcDeps): void {
   )
 
   ipcMain.handle(IPC.settingsLoad, () => loadSettings(deps.dataDir))
-  ipcMain.handle(IPC.settingsSave, (_event, settings: Settings) => saveSettings(deps.dataDir, settings))
+  ipcMain.handle(IPC.settingsSave, async (_event, settings: Settings) => {
+    const saved = await saveSettings(deps.dataDir, settings)
+    // A lowered limit takes effect now rather than at the next launch: the user
+    // just said the cache may use less disk, and `setBudget` sweeps when the
+    // current usage is already over what they asked for.
+    deps.cache.setBudget(saved.cacheBudgetMb * 1024 * 1024)
+    return saved
+  })
+  // Read by the settings menu. Cheap: the walk happens on a background timer,
+  // so this only hands back the last known total.
+  ipcMain.handle(IPC.cacheStats, (): CacheStats => deps.cache.stats())
   ipcMain.handle(IPC.thumbUrl, (_event, photo: Photo, level: ThumbLevel, maxEdge?: number) =>
     deps.library.thumbUrlFor(photo, level, 'interactive', maxEdge)
   )

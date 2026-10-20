@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
+  THUMB_PIPELINE_REVISION,
   THUMB_SHARD_DEPTH,
   THUMB_SIZES,
   VIEWER_EDGE_BUCKET,
   hash64,
+  isCurrentRenditionTag,
+  parseRenditionTag,
   pickThumbLevel,
+  renditionCacheTag,
   thumbKey,
   viewerEdge,
   wallRenditionEdge,
@@ -123,6 +127,78 @@ describe('zoomTierAddsDetail', () => {
   })
 })
 
+describe('renditionCacheTag', () => {
+  it('names everything that determines the bytes', () => {
+    expect(renditionCacheTag('wall', 842, 78)).toBe('wall842q78p1')
+    expect(renditionCacheTag('zoom', 2560, 82)).toBe('zoom2560q82p1')
+    expect(renditionCacheTag('viewer', 1792, 85)).toBe('viewer1792q85p1')
+  })
+
+  it('tracks the pipeline revision constant', () => {
+    // A golden file: if the pipeline changes but this assertion does not, the
+    // cache keeps serving files encoded by the old one. Bumping the revision is
+    // what retires them, so the test is deliberately brittle.
+    expect(THUMB_PIPELINE_REVISION).toBe(1)
+  })
+})
+
+describe('parseRenditionTag', () => {
+  it('round-trips a tag', () => {
+    expect(parseRenditionTag('wall842q78p1')).toEqual({
+      kind: 'wall',
+      edge: 842,
+      quality: 78,
+      revision: 1
+    })
+  })
+
+  it('rejects the pre-0.2.3 names', () => {
+    // These are exactly the files the sweeper has to delete: they carry no
+    // edge/quality/revision, so nothing can tell how they were encoded.
+    expect(parseRenditionTag('wall')).toBeNull()
+    expect(parseRenditionTag('wall842')).toBeNull()
+    expect(parseRenditionTag('zoom')).toBeNull()
+    expect(parseRenditionTag('viewer2048')).toBeNull()
+  })
+
+  it('rejects malformed or hostile names', () => {
+    expect(parseRenditionTag('')).toBeNull()
+    expect(parseRenditionTag('wall0q78p1')).toBeNull()
+    expect(parseRenditionTag('wall842q78p')).toBeNull()
+    expect(parseRenditionTag('wall842q78p1.webp')).toBeNull()
+    expect(parseRenditionTag('wall842q78p01')).not.toBeNull()
+  })
+})
+
+describe('isCurrentRenditionTag', () => {
+  it('accepts what this build writes', () => {
+    expect(isCurrentRenditionTag('wall512q78p1')).toBe(true)
+    expect(isCurrentRenditionTag('wall842q78p1')).toBe(true)
+    expect(isCurrentRenditionTag('zoom2560q82p1')).toBe(true)
+    expect(isCurrentRenditionTag('viewer1792q85p1')).toBe(true)
+  })
+
+  it('rejects a different quality', () => {
+    expect(isCurrentRenditionTag('wall512q82p1')).toBe(false)
+    expect(isCurrentRenditionTag('viewer1792q78p1')).toBe(false)
+  })
+
+  it('rejects a different pipeline revision', () => {
+    expect(isCurrentRenditionTag('wall512q78p0')).toBe(false)
+    expect(isCurrentRenditionTag('wall512q78p2')).toBe(false)
+  })
+
+  it('rejects an edge this build cannot produce', () => {
+    // Below the floor, above the accepted ceiling, or a viewer size that is not
+    // one of the 256px buckets.
+    expect(isCurrentRenditionTag('wall400q78p1')).toBe(false)
+    expect(isCurrentRenditionTag('wall4000q78p1')).toBe(false)
+    expect(isCurrentRenditionTag('zoom1280q82p1')).toBe(false)
+    expect(isCurrentRenditionTag('viewer1000q85p1')).toBe(false)
+    expect(isCurrentRenditionTag('viewer4000q85p1')).toBe(false)
+  })
+})
+
 describe('pickThumbLevel', () => {
   it('uses the wall level for tiles smaller than the wall rendition', () => {
     expect(pickThumbLevel(240, 1)).toBe('wall')
@@ -215,9 +291,28 @@ describe('hash64', () => {
 })
 
 describe('thumbKey', () => {
-  it('encodes the level in the file name', () => {
-    expect(thumbKey('/p/a.jpg', 1, 2, 'wall')).toMatch(/-wall\.webp$/)
-    expect(thumbKey('/p/a.jpg', 1, 2, 'zoom')).toMatch(/-zoom\.webp$/)
+  it('encodes the rendition in the file name', () => {
+    expect(thumbKey('/p/a.jpg', 1, 2, 'wall512q78p1')).toMatch(/-wall512q78p1\.webp$/)
+    expect(thumbKey('/p/a.jpg', 1, 2, 'zoom2560q82p1')).toMatch(/-zoom2560q82p1\.webp$/)
+  })
+
+  it('pins the exact key for a fixed input', () => {
+    /*
+     * Golden key. The hash and the tag both feed the file name, so this fails
+     * the moment anything that determines the encoded bytes changes without the
+     * tag changing with it — which is precisely the bug that would make every
+     * existing cache entry stale but still be served.
+     *
+     * If this test fails, do not update the expected string: decide whether the
+     * change alters the bytes. If it does, bump `THUMB_PIPELINE_REVISION` (or
+     * the quality), which retires the old files; only then update this value.
+     */
+    expect(thumbKey('C:\\photos\\a.jpg', 1700000000000, 123456, 'wall512q78p1')).toBe(
+      '6/9/69127171107a2aec-wall512q78p1.webp'
+    )
+    expect(thumbKey('C:\\photos\\a.jpg', 1700000000000, 123456, 'zoom2560q82p1')).toBe(
+      '3/e/3e3faa8868fa1c62-zoom2560q82p1.webp'
+    )
   })
 
   it('changes when the file changes', () => {
@@ -237,22 +332,22 @@ describe('thumbKey', () => {
   })
 
   it('returns a two-level sharded relative path', () => {
-    // `a/b/<hash>-<level>.webp`. The shard comes from the hash, so the same
+    // `a/b/<hash>-<tag>.webp`. The shard comes from the hash, so the same
     // photo always lands in the same leaf directory and lookups stay O(1).
-    const key = thumbKey('/p/a.jpg', 1000, 500, 'wall')
+    const key = thumbKey('/p/a.jpg', 1000, 500, 'wall512q78p1')
     const segments = key.split('/')
     expect(segments).toHaveLength(THUMB_SHARD_DEPTH + 1)
     expect(segments[0]).toMatch(/^[0-9a-f]$/)
     expect(segments[1]).toMatch(/^[0-9a-f]$/)
-    expect(segments[2]).toMatch(/^[0-9a-f]{16}-wall\.webp$/)
+    expect(segments[2]).toMatch(/^[0-9a-f]{16}-wall512q78p1\.webp$/)
   })
 
   it('derives the shard from the hash, not from the leaf name', () => {
     // Every file's directory prefix must match the head of its own hash, or a
     // lookup could compute one path and write another.
     for (const name of ['a.jpg', 'b.jpg', 'c.jpg', 'IMG_0001.jpg']) {
-      const segments = thumbKey(`/p/${name}`, 1, 2, 'wall').split('/')
-      const hash = segments[2].replace(/-wall\.webp$/, '')
+      const segments = thumbKey(`/p/${name}`, 1, 2, 'wall512q78p1').split('/')
+      const hash = segments[2].replace(/-wall512q78p1\.webp$/, '')
       expect(segments.slice(0, THUMB_SHARD_DEPTH).join('')).toBe(hash.slice(0, THUMB_SHARD_DEPTH))
     }
   })

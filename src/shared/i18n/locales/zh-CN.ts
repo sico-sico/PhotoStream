@@ -31,6 +31,11 @@ export const zhCN: Catalog = {
 
   'settings.recursive': '包含子文件夹中的照片',
   'settings.ringSize': '随机播放中环绕居中的照片数',
+  'settings.cacheBudget': '缩略图缓存上限',
+  'settings.cacheUnlimited': '不限制',
+  'settings.cacheUsage': '当前占用 {size}',
+  'settings.cacheCalculating': '计算中…',
+  'settings.cacheUnlimitedHint': '不限制时缓存会持续增长；失效文件仍会自动清理。',
 
   'history.show': '最近的文件夹',
   'history.title': '最近的文件夹',

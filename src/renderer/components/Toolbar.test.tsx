@@ -47,6 +47,8 @@ function renderToolbar(props: Partial<React.ComponentProps<typeof Toolbar>> = {}
         onRecursiveChange={() => {}}
         ringSize={DEFAULT_RING_SIZE}
         onRingSizeChange={() => {}}
+        cacheBudgetMb={0}
+        onCacheBudgetChange={() => {}}
         onChooseFolder={() => {}}
         onOpenHistory={() => {}}
         onRemoveHistory={() => {}}

@@ -4,7 +4,7 @@ import { mkdtemp, rm, stat, readdir, writeFile } from 'node:fs/promises'
 /**
  * Every file under the cache, recursively.
  *
- * Renditions live in sharded subdirectories (`a/b/hash-wall.webp`), so a flat
+ * Renditions live in sharded subdirectories (`a/b/hash-wall512q78p1.webp`), so a flat
  * `readdir` of the cache root only sees directories. Tests that count files must
  * walk the tree, or they would silently assert on an empty list.
  */
@@ -22,8 +22,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import sharp from 'sharp'
 import {
-  THUMB_QUALITY,
-  VIEWER_QUALITY,
   ensureThumbnail,
   ensureThumbnails,
   renditionQuality,
@@ -31,7 +29,7 @@ import {
   thumbPath,
   type ThumbRequest
 } from './thumbnails'
-import { THUMB_SIZES } from '../shared/thumbs'
+import { THUMB_QUALITY, THUMB_SIZES } from '../shared/thumbs'
 
 let cacheDir = ''
 let sourceDir = ''
@@ -67,9 +65,9 @@ describe('thumbPath', () => {
     expect(thumbPath(cacheDir, request())).toBe(thumbPath(cacheDir, request()))
   })
 
-  it('produces a .webp file named after the level', () => {
-    expect(thumbPath(cacheDir, request('wall'))).toMatch(/-wall\.webp$/)
-    expect(thumbPath(cacheDir, request('zoom'))).toMatch(/-zoom\.webp$/)
+  it('produces a .webp file whose name describes the rendition', () => {
+    expect(thumbPath(cacheDir, request('wall'))).toMatch(/-wall512q78p1\.webp$/)
+    expect(thumbPath(cacheDir, request('zoom'))).toMatch(/-zoom2560q82p1\.webp$/)
   })
 
   it('serves the zoom tier from the wall file when the source is too small', () => {
@@ -83,7 +81,7 @@ describe('thumbPath', () => {
 
   it('keeps a separate zoom file when the source is large enough to fill it', () => {
     const large: ThumbRequest = { ...request('zoom'), sourceWidth: 6000, sourceHeight: 4000 }
-    expect(thumbPath(cacheDir, large)).toMatch(/-zoom\.webp$/)
+    expect(thumbPath(cacheDir, large)).toMatch(/-zoom2560q82p1\.webp$/)
     expect(thumbPath(cacheDir, large)).not.toBe(
       thumbPath(cacheDir, { ...request('wall'), sourceWidth: 6000, sourceHeight: 4000 })
     )
@@ -93,14 +91,14 @@ describe('thumbPath', () => {
     // Missing dimensions are a scan that could not read them. Generating a
     // possibly-redundant file costs disk; skipping a needed one leaves the tile
     // permanently soft, which is the worse failure.
-    expect(thumbPath(cacheDir, request('zoom'))).toMatch(/-zoom\.webp$/)
+    expect(thumbPath(cacheDir, request('zoom'))).toMatch(/-zoom2560q82p1\.webp$/)
   })
 
   it('gives a display-sized rendition its own cache entry', () => {
     // The viewer asks for the size it will paint; that file must never be
     // confused with the 2560 `zoom` file the photo wall uses.
     const sized: ThumbRequest = { ...request('zoom'), maxEdge: 2048, sourceWidth: 8064, sourceHeight: 6048 }
-    expect(thumbPath(cacheDir, sized)).toMatch(/-viewer2048\.webp$/)
+    expect(thumbPath(cacheDir, sized)).toMatch(/-viewer2048q85p1\.webp$/)
     expect(thumbPath(cacheDir, sized)).not.toBe(
       thumbPath(cacheDir, { ...request('zoom'), sourceWidth: 8064, sourceHeight: 6048 })
     )
@@ -109,7 +107,7 @@ describe('thumbPath', () => {
   it('records the requested edge in the size and quality it reports', () => {
     const sized: ThumbRequest = { ...request('zoom'), maxEdge: 2048, sourceWidth: 8064, sourceHeight: 6048 }
     expect(renditionSize(sized)).toBe(2048)
-    expect(renditionQuality(sized)).toBe(VIEWER_QUALITY)
+    expect(renditionQuality(sized)).toBe(THUMB_QUALITY.viewer)
     // The fixed tiers keep their own values.
     expect(renditionSize(request('zoom'))).toBe(THUMB_SIZES.zoom)
     expect(renditionQuality(request('zoom'))).toBe(THUMB_QUALITY.zoom)
@@ -163,11 +161,11 @@ describe('ensureThumbnail', () => {
     // Same source file, two shapes: the tag has to carry the edge, or the
     // second request would be served the first one's 512px file.
     const panorama: ThumbRequest = { ...request('wall'), sourceWidth: 6000, sourceHeight: 1500 }
-    expect(thumbPath(cacheDir, panorama)).toMatch(/-wall880\.webp$/)
+    expect(thumbPath(cacheDir, panorama)).toMatch(/-wall880q78p1\.webp$/)
     expect(thumbPath(cacheDir, panorama)).not.toBe(thumbPath(cacheDir, request('wall')))
     // Ordinary shapes keep the plain tag, so their existing cache stays valid.
     const standard: ThumbRequest = { ...request('wall'), sourceWidth: 1200, sourceHeight: 800 }
-    expect(thumbPath(cacheDir, standard)).toMatch(/-wall\.webp$/)
+    expect(thumbPath(cacheDir, standard)).toMatch(/-wall512q78p1\.webp$/)
   })
 
   it('flattens a transparent PNG onto white', async () => {
@@ -217,7 +215,7 @@ describe('ensureThumbnail', () => {
     expect(zoom).toBe(wall)
     const files = await allFiles(cacheDir)
     expect(files).toHaveLength(1)
-    expect(files[0]).toMatch(/-wall\.webp$/)
+    expect(files[0]).toMatch(/-wall512q78p1\.webp$/)
   })
 
   it('still writes both tiers for a source that can fill them', async () => {

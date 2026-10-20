@@ -6,12 +6,24 @@ import { handlePicProtocol, registerPicScheme } from './protocol'
 import { currentDataDir, resolveThumbCacheDir } from './paths'
 import { MetadataCache } from './metadata-cache'
 import { photoFromArgv } from './drop'
+import { ThumbCache } from './cache-maintenance'
+import { loadSettings } from './settings-store'
 import { mkdir } from 'node:fs/promises'
 
 // Must run before `app.ready`: privileged schemes cannot be registered later.
 registerPicScheme()
 
 const isDev = !app.isPackaged
+
+/**
+ * How long to wait before the first cache sweep.
+ *
+ * The first second of a session belongs to the scan and to the tiles on screen;
+ * a directory walk competing for the disk there makes the wall visibly slower.
+ * Ten seconds is long after the first screenful has encoded and short enough to
+ * still feel like part of startup.
+ */
+const CACHE_SWEEP_DELAY_MS = 10_000
 
 let mainWindow: BrowserWindow | null = null
 let library: PhotoLibrary | null = null
@@ -88,7 +100,21 @@ app.whenReady().then(async () => {
   // opening a folder (measured at 1178 ms of 1296 ms for 3226 photos), and the
   // cache turns a repeat visit into a handful of indexed lookups.
   const metadataCache = new MetadataCache(join(dataDir, 'metadata.db'))
-  library = new PhotoLibrary(thumbCacheDir, broadcast, metadataCache)
+
+  /*
+   * The settings are read here as well as in the renderer.
+   *
+   * The renderer owns every preference the UI shows, but the cache limit has to
+   * be known before the first sweep, which happens without the renderer asking.
+   * Reading the small JSON file once more at startup is cheaper than routing the
+   * value back through IPC before maintenance can begin.
+   */
+  const settings = await loadSettings(dataDir)
+  const thumbCache = new ThumbCache(thumbCacheDir, settings.cacheBudgetMb * 1024 * 1024)
+
+  library = new PhotoLibrary(thumbCacheDir, broadcast, metadataCache, (bytes) =>
+    thumbCache.noteWritten(bytes)
+  )
 
   // Only the open library and the thumbnail cache may be served over pic://.
   handlePicProtocol(() => ({
@@ -99,6 +125,7 @@ app.whenReady().then(async () => {
   registerIpc({
     library,
     dataDir,
+    cache: thumbCache,
     appVersion: app.getVersion(),
     // Reported so the About dialog can name the exact runtime; a rendering or
     // protocol bug is much easier to place when the Chromium build is known.
@@ -109,6 +136,18 @@ app.whenReady().then(async () => {
   })
 
   await createWindow(dataDir, thumbCacheDir)
+
+  /*
+   * Housekeeping runs after the window is up, never before: it walks the whole
+   * cache, which on a USB stick or a cold NTFS volume is seconds of I/O that
+   * would otherwise compete with the scan and the first tiles.
+   *
+   * `force` because this is the pass that also computes the size the settings
+   * menu reports; the throttle only exists to bound budget-triggered sweeps.
+   */
+  setTimeout(() => {
+    void thumbCache.sweep({ force: true }).catch(() => undefined)
+  }, CACHE_SWEEP_DELAY_MS)
 
   // A photo handed over on the command line ("Open with → PhotoStream") has to
   // wait for the renderer to be ready, or the IPC message lands before anything

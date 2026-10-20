@@ -24,6 +24,9 @@ export interface ToolbarProps {
   /** How many photos the random show rings around the centre one. */
   ringSize: number
   onRingSizeChange: (ringSize: number) => void
+  /** Thumbnail-cache limit in megabytes; `0` means unlimited. */
+  cacheBudgetMb: number
+  onCacheBudgetChange: (megabytes: number) => void
   onChooseFolder: () => void
   onOpenHistory: (dir: string) => void
   onRemoveHistory: (dir: string) => void
@@ -57,6 +60,8 @@ export function Toolbar({
   onRecursiveChange,
   ringSize,
   onRingSizeChange,
+  cacheBudgetMb,
+  onCacheBudgetChange,
   onChooseFolder,
   onOpenHistory,
   onRemoveHistory,
@@ -170,6 +175,8 @@ export function Toolbar({
             onRecursiveChange={onRecursiveChange}
             ringSize={ringSize}
             onRingSizeChange={onRingSizeChange}
+            cacheBudgetMb={cacheBudgetMb}
+            onCacheBudgetChange={onCacheBudgetChange}
           />
         )}
       </Menu>

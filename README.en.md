@@ -12,7 +12,7 @@ Open a folder and a few thousand photos appear on one endless canvas, ordered by
 
 Browsing is all it does. It does not import, organise, tag, or edit non-destructively, and it is not a replacement for Lightroom or digiKam. Parsed metadata and thumbnails are cached in `PhotoStreamData/` next to the exe; delete that folder and the app is back to a clean state. Original photos are read, never written.
 
-Scale shaped most of the design. On a test library of 3,226 photos (42.5 GB): about 1.9 s to open the first time, about 107 ms to reopen once metadata is cached, and a steady 60 fps while dragging (17 ms median frame time, no frames over budget). These are measured numbers; the reasoning behind them is in [architecture.md](./docs/architecture.md).
+Scale shaped most of the design. On a test library of 3,226 photos (42.5 GB): about 1.9 s to open the first time, about 107 ms to reopen once metadata is cached, and a steady 60 fps while dragging (17 ms median frame time, no frames over budget). Startup itself is usable in about 0.23 s, and about 0.44 s to the first thumbnail when the last folder is restored. These are measured numbers; the reasoning behind them is in [architecture.md](./docs/architecture.md).
 
 The stack is Electron, React and TypeScript. Image decoding is left to Chromium; thumbnails are generated ahead of time in the main process by `sharp` at two WebP sizes (512 and 2560), so the renderer only positions and transforms them.
 
@@ -50,6 +50,8 @@ Good for: skimming a trip you just finished, finding a particular month across s
 Download `PhotoStream-0.2.2-portable-win-x64.zip` from [Releases](https://github.com/sico-sico/PhotoStream/releases), unzip it, and run `PhotoStream.exe`. No installation.
 
 The app writes its data to `PhotoStreamData/` beside the exe, so the whole folder can be moved elsewhere or onto a USB drive.
+
+Thumbnails live in `PhotoStreamData/thumbs/`. The cache serves every folder you have opened, so it is unlimited by default; set a cap in the gear menu, which also shows the current size. Files left behind by older thumbnail algorithms are cleaned up automatically, so there is no folder to delete by hand.
 
 ## Build from source
 

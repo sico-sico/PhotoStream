@@ -77,6 +77,8 @@ export interface UseWall {
   setRecursive: (recursive: boolean) => void
   /** How many photos the random show rings around the centre one. */
   setRingSize: (ringSize: number) => void
+  /** Thumbnail-cache limit in megabytes; `0` means unlimited. */
+  setCacheBudgetMb: (megabytes: number) => void
   /**
    * Start loading thumbnails around a scroll destination.
    *
@@ -350,6 +352,8 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
       // Absent in files written before the ring-size preference existed, and
       // `sanitizeSettings` has already clamped whatever was there.
       dispatch({ type: 'ring/size', ringSize: settings.ringSize })
+      // Same contract; `0` (unlimited) is a real value, not a missing one.
+      dispatch({ type: 'cache/budget', cacheBudgetMb: settings.cacheBudgetMb })
       // Only reopen the remembered folder if the user has not opened one
       // themselves already. `loadSettings` is async, so a folder dragged in
       // right after launch arrives before this point 鈥?and reopening `lastDir`
@@ -392,7 +396,8 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
       history: state.history,
       recursive: state.recursive,
       viewerInfo: state.viewerInfo,
-      ringSize: state.ringSize
+      ringSize: state.ringSize,
+      cacheBudgetMb: state.cacheBudgetMb
     }
     void window.photoStream.saveSettings(settings)
   }, [
@@ -405,7 +410,8 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
     state.history,
     state.recursive,
     state.viewerInfo,
-    state.ringSize
+    state.ringSize,
+    state.cacheBudgetMb
   ])
 
   // Subscribe to watcher deltas and thumbnail progress.
@@ -831,6 +837,7 @@ export function useWall(viewport: { width: number; height: number }): UseWall {
     ensureThumbs,
     setRecursive,
     setRingSize: (ringSize: number) => dispatch({ type: 'ring/size', ringSize }),
+    setCacheBudgetMb: (megabytes: number) => dispatch({ type: 'cache/budget', cacheBudgetMb: megabytes }),
     openHistoryEntry,
     removeHistoryEntry,
     clearHistory,

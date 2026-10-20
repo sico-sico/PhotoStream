@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { IPC } from '../shared/ipc'
 import type { Photo, ScanResult } from '../shared/types'
+import { ThumbCache } from './cache-maintenance'
 
 /**
  * Two folders dropped close together.
@@ -91,6 +92,7 @@ beforeEach(async () => {
   registerIpc({
     library,
     dataDir: cacheDir,
+    cache: new ThumbCache(cacheDir),
     appVersion: '0',
     versions: { electron: '0', chromium: '0' },
     systemLocales: []

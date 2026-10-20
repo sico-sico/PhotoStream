@@ -31,6 +31,12 @@ export const fr: Catalog = {
 
   'settings.recursive': 'Inclure les photos des sous-dossiers',
   'settings.ringSize': 'Photos autour du centre dans le diaporama aléatoire',
+  'settings.cacheBudget': 'Limite du cache de vignettes',
+  'settings.cacheUnlimited': 'Sans limite',
+  'settings.cacheUsage': 'Utilisation : {size}',
+  'settings.cacheCalculating': 'Calcul en cours…',
+  'settings.cacheUnlimitedHint':
+    'Sans limite, le cache ne cesse de croître. Les fichiers obsolètes restent supprimés.',
 
   'history.show': 'Dossiers récents',
   'history.title': 'Dossiers récents',

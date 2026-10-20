@@ -40,6 +40,11 @@ export const en = {
 
   'settings.recursive': 'Include photos in subfolders',
   'settings.ringSize': 'Photos around the centre in the random show',
+  'settings.cacheBudget': 'Thumbnail cache limit',
+  'settings.cacheUnlimited': 'No limit',
+  'settings.cacheUsage': 'Using {size}',
+  'settings.cacheCalculating': 'Calculating…',
+  'settings.cacheUnlimitedHint': 'Without a limit the cache keeps growing. Stale files are still cleaned up.',
 
   'history.show': 'Recent folders',
   'history.title': 'Recent folders',

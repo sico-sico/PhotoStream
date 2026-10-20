@@ -8,6 +8,7 @@ export const IPC = {
   photosChanged: 'photos:changed',
   settingsLoad: 'settings:load',
   settingsSave: 'settings:save',
+  cacheStats: 'cache:stats',
   thumbUrl: 'thumb:url',
   thumbUrls: 'thumb:urls',
   thumbReady: 'thumb:ready',

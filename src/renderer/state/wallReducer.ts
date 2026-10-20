@@ -1,5 +1,5 @@
 import type { Filters, LayoutMode, Photo, SortMode } from '@shared/types'
-import { DEFAULT_RING_SIZE, DEFAULT_SORT, EMPTY_FILTERS, clampRingSize } from '@shared/types'
+import { DEFAULT_RING_SIZE, DEFAULT_SORT, EMPTY_FILTERS, clampCacheBudgetMb, clampRingSize } from '@shared/types'
 import { sortPhotos } from '@shared/photoStore'
 import { addToHistory, removeFromHistory, sanitizeHistory } from '@shared/history'
 
@@ -54,6 +54,8 @@ export interface WallState {
   recursive: boolean
   /** Ceiling on the random show's ring, from the user's preference. */
   ringSize: number
+  /** Thumbnail-cache limit in megabytes; `0` means unlimited. */
+  cacheBudgetMb: number
 }
 
 export const INITIAL_STATE: WallState = {
@@ -71,7 +73,8 @@ export const INITIAL_STATE: WallState = {
   locale: '',
   history: [],
   recursive: false,
-  ringSize: DEFAULT_RING_SIZE
+  ringSize: DEFAULT_RING_SIZE,
+  cacheBudgetMb: 0
 }
 
 export type WallAction =
@@ -90,6 +93,7 @@ export type WallAction =
   | { type: 'history/clear' }
   | { type: 'recursive/set'; recursive: boolean }
   | { type: 'ring/size'; ringSize: number }
+  | { type: 'cache/budget'; cacheBudgetMb: number }
   | { type: 'selection/set'; id: string | null }
   | { type: 'selection/focus'; id: string | null }
   | { type: 'selection/step'; delta: number; order: readonly string[] }
@@ -179,6 +183,10 @@ export function reducer(state: WallState, action: WallAction): WallState {
       // between the UI and the persisted value, so it is the one place that must
       // not let an out-of-range number through.
       return { ...state, ringSize: clampRingSize(action.ringSize) }
+
+    case 'cache/budget':
+      // `0` is unlimited and has to survive the clamp as itself, not as "falsy".
+      return { ...state, cacheBudgetMb: clampCacheBudgetMb(action.cacheBudgetMb) }
 
     case 'selection/set':
       // Focusing a photo also opens it: that is what clicking a tile means. The

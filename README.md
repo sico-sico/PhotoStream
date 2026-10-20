@@ -12,7 +12,7 @@ PhotoStream 把一个文件夹的照片（JPEG / PNG）铺成一面可以拖动�
 
 它只做浏览这一件事。不导入、不整理、不打标签、不做非破坏编辑，也不试图取代 Lightroom 或 digiKam。所有的解析结果和缩略图都缓存在 exe 旁边的 `PhotoStreamData/`，删掉即回到干净状态；原照片只被读取，从不被写入。
 
-规模是设计时的第一约束。测试库 3226 张、42.5 GB：首次打开约 1.9 秒，元数据缓存命中后重开约 107 ms，拖动稳定在 60 fps（帧时间中位数 17 ms，无超时帧）。这些数字来自实测，取舍过程写在 [architecture.md](./docs/architecture.md)。
+规模是设计时的第一约束。测试库 3226 张、42.5 GB：首次打开约 1.9 秒，元数据缓存命中后重开约 107 ms，拖动稳定在 60 fps（帧时间中位数 17 ms，无超时帧）。启动本身约 0.23 秒可操作，恢复上次文件夹时约 0.44 秒出现首张缩略图。这些数字来自实测，取舍过程写在 [architecture.md](./docs/architecture.md)。
 
 技术栈是 Electron + React + TypeScript。图像解码交给 Chromium，缩略图由 `sharp` 在主进程预生成两档 WebP（512 与 2560），渲染进程只负责摆放和变换。
 
@@ -50,6 +50,8 @@ PhotoStream 把一个文件夹的照片（JPEG / PNG）铺成一面可以拖动�
 从 [Releases](https://github.com/sico-sico/PhotoStream/releases) 下载 `PhotoStream-0.2.2-portable-win-x64.zip`，解压后双击 `PhotoStream.exe`，无需安装。
 
 应用把数据写在自己旁边的 `PhotoStreamData/` 里，整个文件夹可以移到别处或 U 盘。
+
+缩略图缓存在 `PhotoStreamData/thumbs/`。它服务你打开过的所有文件夹，所以默认不限制大小；可以在齿轮菜单里设上限，设置里也会显示当前占用。旧算法留下的缓存文件会自动清理，不需要手动删目录。
 
 ## 从源码构建
 

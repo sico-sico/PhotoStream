@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { AppInfo, OpenDroppedResult, Photo, ScanResult, Settings, ThumbLevel, ThumbPriority } from '../shared/types'
+import type { AppInfo, CacheStats, OpenDroppedResult, Photo, ScanResult, Settings, ThumbLevel, ThumbPriority } from '../shared/types'
 import type { RawExif } from '../shared/exif'
 import { IPC } from '../shared/ipc'
 
@@ -41,6 +41,13 @@ export interface PhotoStreamApi {
   pathForFile: (file: File) => string
   loadSettings: () => Promise<Settings>
   saveSettings: (settings: Settings) => Promise<Settings>
+  /**
+   * Disk usage of the thumbnail cache.
+   *
+   * `ready` is false until the startup sweep has walked the directory, so the
+   * settings menu shows "calculating" instead of a misleading zero.
+   */
+  cacheStats: () => Promise<CacheStats>
   /**
    * URL of one rendition.
    *
@@ -96,6 +103,7 @@ const api: PhotoStreamApi = {
   },
   loadSettings: () => ipcRenderer.invoke(IPC.settingsLoad),
   saveSettings: (settings) => ipcRenderer.invoke(IPC.settingsSave, settings),
+  cacheStats: () => ipcRenderer.invoke(IPC.cacheStats),
   thumbUrl: (photo, level, maxEdge) => ipcRenderer.invoke(IPC.thumbUrl, photo, level, maxEdge),
   requestThumbs: (photos, level, priority) => ipcRenderer.invoke(IPC.thumbUrls, photos, level, priority),
   onThumbReady: (listener) => {

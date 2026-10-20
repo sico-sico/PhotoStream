@@ -409,6 +409,8 @@ function AppView({
         onRecursiveChange={wall.setRecursive}
         ringSize={wall.state.ringSize}
         onRingSizeChange={wall.setRingSize}
+        cacheBudgetMb={wall.state.cacheBudgetMb}
+        onCacheBudgetChange={wall.setCacheBudgetMb}
         onChooseFolder={wall.chooseFolder}
         onOpenHistory={wall.openHistoryEntry}
         onRemoveHistory={wall.removeHistoryEntry}

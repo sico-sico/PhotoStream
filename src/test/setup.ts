@@ -44,9 +44,14 @@ if (hasDom) {
           sort: 'taken-desc',
           filters: { from: '', to: '', text: '' },
           locale: '',
-          history: []
+          history: [],
+          recursive: false,
+          viewerInfo: false,
+          ringSize: 70,
+          cacheBudgetMb: 0
         }),
         saveSettings: async (settings: unknown) => settings,
+        cacheStats: async () => ({ bytes: 0, files: 0, ready: true }),
         thumbUrl: async () => '',
         thumbUrls: async () => [],
         revealInFolder: async () => {},

@@ -26,6 +26,113 @@ export const THUMB_SIZES: Record<Exclude<ThumbLevel, 'full'>, number> = {
 }
 
 /**
+ * Which family a cached rendition belongs to.
+ *
+ * Not the same as `ThumbLevel`: the viewer asks for a `zoom`-shaped request but
+ * gets a display-sized `viewer` file, which is its own family because it has its
+ * own quality and its own set of legal edges.
+ */
+export type RenditionKind = 'wall' | 'zoom' | 'viewer'
+
+/**
+ * WebP quality per family.
+ *
+ * Part of the cache key rather than a number buried in the encoder: raising it
+ * has to invalidate the files written at the old value, or the improvement
+ * would never reach a user who had already browsed that folder.
+ *
+ * `viewer` is the highest of the three because it is the tier a single photo is
+ * read at, and unlike the wall tiers it is not downscaled again by the browser,
+ * so any artefact it carries stays visible.
+ */
+export const THUMB_QUALITY = { wall: 78, zoom: 82, viewer: 85 } as const
+
+/**
+ * Revision of everything else in the encoding pipeline.
+ *
+ * `THUMB_QUALITY` covers the encoder's quality knob and the edge covers
+ * geometry, but neither changes when the *order* of operations changes
+ * (rotate → resize → flatten → WebP) or when the output format does. Bump this
+ * by hand for those; the cache sweeper treats every older revision as an orphan,
+ * so the next browse re-encodes with the new pipeline.
+ */
+export const THUMB_PIPELINE_REVISION = 1
+
+/**
+ * Widest `wall` edge a cached file may carry and still be considered current.
+ *
+ * Deliberately wider than `wallRenditionEdge` can return today (512 or
+ * 564..1300). The sweeper only has to reject renditions that are provably from
+ * an older build, and a bound computed too tightly there would delete files that
+ * are still usable. It is still finite, so changing the layout constants (say a
+ * 300px row height) does retire the old geometry instead of keeping it forever.
+ */
+export const WALL_EDGE_ACCEPTED_MAX = 2048
+
+/**
+ * Cache tag for one rendition: `<kind><edge>q<quality>p<revision>`.
+ *
+ * Self-describing on purpose. A filename is the only state the cache keeps, so
+ * everything that determines the bytes has to be in the name; that is what makes
+ * the sweeper possible without a manifest that could fall out of sync.
+ */
+export function renditionCacheTag(kind: RenditionKind, edge: number, quality: number): string {
+  return `${kind}${edge}q${quality}p${THUMB_PIPELINE_REVISION}`
+}
+
+const RENDITION_TAG_PATTERN = /^(wall|zoom|viewer)(\d+)q(\d+)p(\d+)$/
+
+export interface ParsedRenditionTag {
+  kind: RenditionKind
+  edge: number
+  quality: number
+  revision: number
+}
+
+/** Parse a cache tag, or `null` when it is not one of ours. */
+export function parseRenditionTag(tag: string): ParsedRenditionTag | null {
+  const match = RENDITION_TAG_PATTERN.exec(tag)
+  if (!match) return null
+  const edge = Number(match[2])
+  const quality = Number(match[3])
+  const revision = Number(match[4])
+  if (!Number.isInteger(edge) || edge <= 0) return null
+  if (!Number.isInteger(quality) || !Number.isInteger(revision)) return null
+  return { kind: match[1] as RenditionKind, edge, quality, revision }
+}
+
+/**
+ * Whether this build could have written the tag, and could still read it.
+ *
+ * Used only by the cache sweeper, so it answers one question: is this file worth
+ * keeping? Unknown shapes are handled by the caller, which keeps them; this
+ * function says `false` for anything it does not recognise.
+ */
+export function isCurrentRenditionTag(tag: string): boolean {
+  const parsed = parseRenditionTag(tag)
+  if (!parsed) return false
+  if (parsed.revision !== THUMB_PIPELINE_REVISION) return false
+
+  switch (parsed.kind) {
+    case 'wall':
+      return (
+        parsed.quality === THUMB_QUALITY.wall &&
+        parsed.edge >= THUMB_SIZES.wall &&
+        parsed.edge <= WALL_EDGE_ACCEPTED_MAX
+      )
+    case 'zoom':
+      return parsed.quality === THUMB_QUALITY.zoom && parsed.edge === THUMB_SIZES.zoom
+    case 'viewer':
+      return (
+        parsed.quality === THUMB_QUALITY.viewer &&
+        parsed.edge >= THUMB_SIZES.wall &&
+        parsed.edge <= THUMB_SIZES.zoom &&
+        parsed.edge % VIEWER_EDGE_BUCKET === 0
+      )
+  }
+}
+
+/**
  * Long edge a `wall` rendition needs for a photo of this shape.
  *
  * The wall paints each tile at the photo's own aspect ratio, and every layout
@@ -164,17 +271,16 @@ export const THUMB_SHARD_WIDTH = 1
 /**
  * Cache key: a sharded relative path.
  *
- * Returns `a/b/<hash>-<level>.webp` — a POSIX-style relative path, not a bare
+ * Returns `a/b/<hash>-<tag>.webp` — a POSIX-style relative path, not a bare
  * filename, because callers must create the directories and serve the file over
  * `pic://thumb` with the same shape.
  *
  * Stable across runs: the shard comes from the hash, so the same photo always
  * lands in the same leaf directory.
  *
- * `level` is a plain string rather than the `ThumbLevel` union because the
- * viewer requests display-sized renditions tagged `viewer1856`; the tag only
- * has to be unique per size, and widening it here keeps one cache-key rule
- * instead of two.
+ * `level` is a plain string rather than the `ThumbLevel` union because the tag
+ * now encodes the rendition itself (`wall842q78p1`, `viewer1792q85p1`), and the
+ * key has to stay one rule instead of one per family.
  */
 export function thumbKey(
   path: string,

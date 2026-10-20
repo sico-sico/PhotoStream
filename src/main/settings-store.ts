@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { Settings } from '../shared/types'
-import { DEFAULT_SETTINGS, clampRingSize } from '../shared/types'
+import { DEFAULT_SETTINGS, clampCacheBudgetMb, clampRingSize } from '../shared/types'
 import { sanitizeHistory } from '../shared/history'
 
 /**
@@ -55,7 +55,13 @@ export function sanitizeSettings(raw: unknown): Settings {
     ringSize:
       typeof source.ringSize === 'number' && Number.isFinite(source.ringSize)
         ? clampRingSize(source.ringSize)
-        : DEFAULT_SETTINGS.ringSize
+        : DEFAULT_SETTINGS.ringSize,
+    // Same contract again: absent in older files, hand-editable, and `0` is a
+    // meaningful value (unlimited) rather than a missing one.
+    cacheBudgetMb:
+      typeof source.cacheBudgetMb === 'number' && Number.isFinite(source.cacheBudgetMb)
+        ? clampCacheBudgetMb(source.cacheBudgetMb)
+        : DEFAULT_SETTINGS.cacheBudgetMb
   }
 }
 

@@ -93,6 +93,34 @@ export function clampRingSize(value: number): number {
   return Math.min(RING_SIZE_RANGE.max, Math.max(RING_SIZE_RANGE.min, Math.round(value)))
 }
 
+/**
+ * Thumbnail-cache limit, in megabytes. `0` means no limit.
+ *
+ * Zero is the default because any number would be a guess about someone else's
+ * disk: a user who browses two folders a year and one who browses a decade of
+ * shoots need wildly different values. What is *not* left to the user is orphan
+ * collection — that runs regardless, because stale files are a correctness
+ * problem rather than a space policy.
+ */
+export const CACHE_BUDGET_UNLIMITED = 0
+
+/** Values offered in the settings menu. Hand-edited files may hold others. */
+export const CACHE_BUDGET_PRESETS = [CACHE_BUDGET_UNLIMITED, 1024, 2048, 4096, 8192] as const
+
+/**
+ * Ceiling for a hand-edited value.
+ *
+ * Generous enough that nobody legitimate hits it, finite so a typo cannot ask
+ * the sweeper to compare against `Number.MAX_SAFE_INTEGER`.
+ */
+export const CACHE_BUDGET_MAX_MB = 1024 * 1024
+
+/** Clamp an arbitrary value into a usable megabyte count. */
+export function clampCacheBudgetMb(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) return CACHE_BUDGET_UNLIMITED
+  return Math.min(CACHE_BUDGET_MAX_MB, Math.round(value))
+}
+
 export interface Settings {
   lastDir: string
   layout: LayoutMode
@@ -139,6 +167,14 @@ export interface Settings {
    * `RING_SIZE_RANGE` so a hand-edited file cannot ask for a thousand cards.
    */
   ringSize: number
+  /**
+   * Thumbnail-cache limit in megabytes; `0` means unlimited.
+   *
+   * The cache serves every folder ever opened, so without a limit it only ever
+   * grows. A limit turns that into "keep the most recent N megabytes", evicting
+   * the oldest renditions; they are cheap to rebuild.
+   */
+  cacheBudgetMb: number
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -150,7 +186,20 @@ export const DEFAULT_SETTINGS: Settings = {
   history: [],
   recursive: false,
   viewerInfo: false,
-  ringSize: DEFAULT_RING_SIZE
+  ringSize: DEFAULT_RING_SIZE,
+  cacheBudgetMb: CACHE_BUDGET_UNLIMITED
+}
+
+/**
+ * Disk usage of the thumbnail cache.
+ *
+ * `ready` is false until the first background sweep has finished walking the
+ * directory, which is when the numbers become meaningful rather than zero.
+ */
+export interface CacheStats {
+  bytes: number
+  files: number
+  ready: boolean
 }
 
 /**

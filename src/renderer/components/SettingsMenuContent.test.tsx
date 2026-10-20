@@ -19,6 +19,8 @@ function renderContent(
     onRecursiveChange: () => {},
     ringSize: DEFAULT_RING_SIZE,
     onRingSizeChange: () => {},
+    cacheBudgetMb: 0,
+    onCacheBudgetChange: () => {},
     ...props
   }
   return render(
@@ -33,6 +35,14 @@ describe('SettingsMenuContent', () => {
     renderContent()
     expect(screen.getByLabelText('Language')).toBeInTheDocument()
     expect(screen.getAllByRole('option').length).toBeGreaterThan(1)
+  })
+
+  it('marks the language picker so it can be told apart from the other selects', () => {
+    // The gear menu now holds two select boxes. A class is what lets the
+    // end-to-end tests address the language one without depending on translated
+    // accessible names.
+    renderContent()
+    expect(screen.getByLabelText('Language')).toHaveClass('settings-language')
   })
 
   it('reflects the active language', () => {
@@ -129,6 +139,72 @@ describe('SettingsMenuContent', () => {
     it('translates the label', () => {
       renderContent({}, 'zh-CN')
       expect(screen.getByText('随机播放中环绕居中的照片数')).toBeInTheDocument()
+    })
+  })
+
+  describe('thumbnail cache', () => {
+    it('offers a budget selector with an unlimited default', () => {
+      renderContent()
+      const select = screen.getByLabelText('Thumbnail cache limit') as HTMLSelectElement
+      expect(select.value).toBe('0')
+      expect(screen.getByRole('option', { name: 'No limit' })).toBeInTheDocument()
+      expect(screen.getByRole('option', { name: '2 GB' })).toBeInTheDocument()
+    })
+
+    it('reports the chosen limit in megabytes', () => {
+      const onCacheBudgetChange = vi.fn()
+      renderContent({ cacheBudgetMb: 0, onCacheBudgetChange })
+      fireEvent.change(screen.getByLabelText('Thumbnail cache limit'), { target: { value: '4096' } })
+      expect(onCacheBudgetChange).toHaveBeenCalledWith(4096)
+    })
+
+    it('keeps a hand-edited value selectable instead of showing the first option', () => {
+      // 3000 MB is not a preset. Without a synthetic option the control would
+      // display "No limit" while the stored value says otherwise.
+      renderContent({ cacheBudgetMb: 3000 })
+      const select = screen.getByLabelText('Thumbnail cache limit') as HTMLSelectElement
+      expect(select.value).toBe('3000')
+      expect(screen.getByRole('option', { name: '2.9 GB' })).toBeInTheDocument()
+    })
+
+    it('shows the size the main process reports', async () => {
+      const stats = vi.spyOn(window.photoStream, 'cacheStats').mockResolvedValue({
+        bytes: 1.5 * 1024 * 1024 * 1024,
+        files: 4000,
+        ready: true
+      })
+      renderContent()
+      expect(await screen.findByText('Using 1.5 GB')).toBeInTheDocument()
+      stats.mockRestore()
+    })
+
+    it('says it is calculating rather than showing a misleading zero', async () => {
+      // The startup sweep runs ten seconds in; before that the total is unknown,
+      // not zero.
+      const stats = vi.spyOn(window.photoStream, 'cacheStats').mockResolvedValue({
+        bytes: 0,
+        files: 0,
+        ready: false
+      })
+      renderContent()
+      expect(await screen.findByText('Calculating…')).toBeInTheDocument()
+      stats.mockRestore()
+    })
+
+    it('warns that unlimited means unbounded growth', () => {
+      renderContent({ cacheBudgetMb: 0 })
+      expect(screen.getByText(/the cache keeps growing/i)).toBeInTheDocument()
+    })
+
+    it('drops the warning once a limit is set', () => {
+      renderContent({ cacheBudgetMb: 2048 })
+      expect(screen.queryByText(/the cache keeps growing/i)).toBeNull()
+    })
+
+    it('translates the labels', () => {
+      renderContent({ cacheBudgetMb: 0 }, 'zh-CN')
+      expect(screen.getByText('缩略图缓存上限')).toBeInTheDocument()
+      expect(screen.getByRole('option', { name: '不限制' })).toBeInTheDocument()
     })
   })
 })

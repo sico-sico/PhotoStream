@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DEFAULT_RING_SIZE, DEFAULT_SETTINGS, RING_SIZE_RANGE } from '../shared/types'
+import { CACHE_BUDGET_MAX_MB, DEFAULT_RING_SIZE, DEFAULT_SETTINGS, RING_SIZE_RANGE } from '../shared/types'
 import { SETTINGS_FILE, loadSettings, sanitizeSettings, saveSettings, settingsPath, stripBom } from './settings-store'
 
 let dir = ''
@@ -32,7 +32,8 @@ describe('sanitizeSettings', () => {
       history: ['/photos'],
       recursive: false,
       viewerInfo: true,
-      ringSize: 45
+      ringSize: 45,
+      cacheBudgetMb: 2048
     }
     expect(sanitizeSettings(value)).toEqual(value)
   })
@@ -64,6 +65,28 @@ describe('sanitizeSettings', () => {
     expect(sanitizeSettings({ ringSize: 'lots' }).ringSize).toBe(DEFAULT_RING_SIZE)
     expect(sanitizeSettings({ ringSize: null }).ringSize).toBe(DEFAULT_RING_SIZE)
     expect(sanitizeSettings({ ringSize: Number.NaN }).ringSize).toBe(DEFAULT_RING_SIZE)
+  })
+
+  it('defaults a missing cacheBudgetMb to unlimited', () => {
+    // Unlimited is the documented default, and `undefined` would compare as NaN
+    // in every later check.
+    expect(sanitizeSettings({ lastDir: '/photos' }).cacheBudgetMb).toBe(0)
+  })
+
+  it('keeps 0 as unlimited rather than treating it as missing', () => {
+    // The classic truthiness bug: `value || default` would silently turn the
+    // user's explicit "no limit" into a limit.
+    expect(sanitizeSettings({ cacheBudgetMb: 0 }).cacheBudgetMb).toBe(0)
+  })
+
+  it('clamps cacheBudgetMb into a usable range', () => {
+    expect(sanitizeSettings({ cacheBudgetMb: -5 }).cacheBudgetMb).toBe(0)
+    expect(sanitizeSettings({ cacheBudgetMb: 2048.4 }).cacheBudgetMb).toBe(2048)
+    expect(sanitizeSettings({ cacheBudgetMb: Number.MAX_SAFE_INTEGER }).cacheBudgetMb).toBe(
+      CACHE_BUDGET_MAX_MB
+    )
+    expect(sanitizeSettings({ cacheBudgetMb: 'lots' }).cacheBudgetMb).toBe(0)
+    expect(sanitizeSettings({ cacheBudgetMb: Number.NaN }).cacheBudgetMb).toBe(0)
   })
 
   it('defaults a missing history to an empty list', () => {
@@ -199,7 +222,8 @@ describe('saveSettings', () => {
       history: ['/photos', '/photos/trip'],
       recursive: true,
       viewerInfo: true,
-      ringSize: 80
+      ringSize: 80,
+      cacheBudgetMb: 2048
     }
     await saveSettings(dir, settings)
 

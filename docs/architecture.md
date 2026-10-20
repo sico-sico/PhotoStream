@@ -7,6 +7,7 @@
     - [图片渲染链路](#图片渲染链路)
   - [实现细节](#实现细节)
     - [拖动性能](#拖动性能)
+    - [启动耗时](#启动耗时)
     - [支持的格式与日期兜底](#支持的格式与日期兜底)
     - [查看页的 1:1 锐度](#查看页的-11-锐度)
     - [滚动条预取](#滚动条预取)
@@ -21,6 +22,7 @@
     - [全景图的 wall 档位由宽高比决定](#全景图的-wall-档位由宽高比决定)
     - [小图的 zoom 档位是冗余的](#小图的-zoom-档位是冗余的)
     - [缩略图缓存分片](#缩略图缓存分片)
+    - [缓存失效与回收](#缓存失效与回收)
     - [滚轮手势](#滚轮手势)
     - [文件锁](#文件锁)
     - [设置文件 BOM](#设置文件-bom)
@@ -55,6 +57,10 @@
 | `image-size` | `devDependencies` | 纯 JS，体积小且无副作用，被 Vite 直接内联进 `out/main/index.js` |
 
 `image-size` 放在 `devDependencies` 是有意为之：它会被打进 bundle，运行时不需要在 `node_modules` 里找到它。若将来改成外部化，必须同时把它移到 `dependencies`，否则打包后会在启动时 `MODULE_NOT_FOUND`。
+
+`sharp` 是唯一一个**动态加载**的依赖：`main/sharp-loader.ts` 在第一次真正处理照片时才 `import('sharp')`，因为加载这个原生模块要 ~40 ms，而没有任何照片需要处理的启动（例如上次没打开目录）不该付这笔钱。代价是首次扫描时多一次模块解析，它与窗口创建并行，测不出来。
+
+渲染层在构建时压缩（`minify: 'esbuild'`）。`electron-vite` 把三端的 `minify` 都默认为 `false`；对 main 那样堆栈可读是合理的，对渲染层则只是让 Chromium 在首帧前多解析 470 KB 的注释和空白。
 
 选型前的完整实测过程见 [research.md](./research.md)。
 
@@ -112,6 +118,29 @@
 结果：DOM 瓦片 3226 → 64，帧时间中位数 **17 ms（60 fps）**，p95 17 ms，超时帧 0。
 
 **为什么没有引第三方虚拟化库**（2026-10 复测，见 [research.md §11](./research.md#11-虚拟化逻辑评估是否需要第三方实现)）：TanStack Virtual / react-window / react-virtuoso 都以**滚动容器**为输入，item 尺寸靠估算或测量；而我们的 pan/zoom 是一个 `transform`，布局尺寸在布局阶段就已精确算出，裁剪只是世界矩形相交查询。3226 张时 `cullItems` 中位数 **0.015 ms**（10 万张 0.58 ms），加上布局与请求过滤整套虚拟化计算仍 **< 1 ms/次交互**。换库还要把 transform 映射成滚动偏移、每次缩放重建虚拟器，并重写拖动、锚点缩放和日期滚动条，收益为负。真正随规模变差的是布局重算与 `minScale` 二分，那属于布局索引层，第三方库同样不解决。
+
+### 启动耗时
+
+打包版实测，Windows、NTFS、OS 文件缓存已热，5 次取中位数。时间从 `electron.launch()` 开始，所以包含 Chromium 自身的进程启动；复现用 `node scripts/measure-startup.mjs <photo-dir>`（`PS_EXE=` 指向打包后的 exe）。
+
+| 阶段 | 时间 | 说明 |
+|---|---|---|
+| 启动 → 窗口出现（`ready-to-show`） | 206 ms | 主进程此刻 `uptime` 195 ms，其余是 Playwright 拿到窗口的开销 |
+| 启动 → `DOMContentLoaded` | 234 ms | 压缩后的渲染 bundle，解析约 10 ms |
+| 启动 → 首张瓦片（恢复 200 张的上次目录，元数据与缩略图均命中） | 437 ms | 其中扫描只占约 20–60 ms（2000 张实测 55–60 ms） |
+| 启动 → 首张图片解码完成 | 467 ms | 其余是 45 个可见瓦片的 IPC、`pic://` 与 WebP 解码 |
+| 空库（没有上次目录）到可操作 | 234 ms | 主进程 RSS 93 MB，渲染层堆约 12 MB、58 个节点 |
+
+首屏之后的开销都随图库规模走：元数据缓存命中时扫描约 30 µs/张（3226 张 ≈ 100 ms），首次扫描则付 512 KB/张的 EXIF 前缀读取（见[打开文件夹时的磁盘 I/O](#打开文件夹时的磁盘-io-与-defender)）。
+
+两处改动压的是「窗口出现之前」这一段（A/B：同一台机器、同一脚本、各 5 次中位数）：
+
+| 改动 | 效果 |
+|---|---|
+| 渲染层开启压缩（`minify: 'esbuild'`，electron-vite 默认 `false`） | bundle 792 → 314 KB；`DOMContentLoaded` 266 → 234 ms |
+| `sharp` 改为首次使用时才 `import()` | 原生模块的 ~30–40 ms 加载不再挡在 `whenReady` 之前；首窗口 234 → 206 ms，主进程 RSS 103 → 93 MB |
+
+恢复上次目录时 `sharp` 反正要立刻加载，所以首张缩略图的绝对时间没有可测量的变化（437 ms vs 439 ms）——省下的是它与建窗口串行的那一段。窗口在 `ready-to-show` 之后才显示（`show: false`），两项改动因此都落在用户看到窗口之前，而不是把内容往后推。
 
 ### 支持的格式与日期兜底
 
@@ -396,7 +425,7 @@ been built in: HEVC (a suitable decoder plugin is libde265)
 
 只有超过约 2:1（或 1:2）的照片才会突破 512px 下限，普通照片的档位不变。门槛是 `512 × 1.1`：刚好超一点的图不值得多一份更大的文件。尺寸来自扫描结果，`withoutEnlargement` 仍把源图作为上限。
 
-缓存 tag 随长边变化：普通照片仍是 `wall`（已有缓存继续有效），全景图是 `wall842`。若沿用 `wall`，已缓存的 512px 文件会永远命中，新的清晰版本反而永远不生成。
+缓存 tag 随长边变化：普通照片是 `wall512q78p1`，全景图是 `wall842q78p1`（tag 规则见后文「缓存失效与回收」）。若沿用固定名，已缓存的 512px 文件会永远命中，新的清晰版本反而永远不生成。
 
 实测同一张全景图（`grid` 行高 220）：梯度能量 16.08 → 20.94，理想参考值 21.57；文件 11.4 KB → 27.4 KB。放大倍率 1.64× → 1.00×。
 
@@ -413,12 +442,12 @@ been built in: HEVC (a suitable decoder plugin is libde265)
 缓存键因此是分层的相对路径（`shared/thumbs.ts` 的 `thumbKey`）：
 
 ```
-thumbs/a/b/<16位hash>-wall.webp
-thumbs/a/b/<16位hash>-wall842.webp
-thumbs/a/b/<16位hash>-viewer2048.webp
+thumbs/a/b/<16位hash>-wall512q78p1.webp
+thumbs/a/b/<16位hash>-wall842q78p1.webp
+thumbs/a/b/<16位hash>-viewer1792q85p1.webp
 ```
 
-- `wall<edge>` 只出现在全景图这类长边超过 512px 下限的照片上（见上一节）；普通照片仍是 `wall`。
+- `wall<edge>` 中 `edge` 由宽高比决定（见上一节）：普通照片 512，全景图更大。
 - `viewer<edge>` 的 `edge` 只会是 256 的倍数（`VIEWER_EDGE_BUCKET`），所以窗口尺寸变化不会让缓存无限增长；源图小于 `wall` 档位时这类请求直接复用 `wall` 文件，不额外编码。
 
 - **两级、每级 1 个十六进制字符**，共 256 个叶子目录。分片取自哈希本身，所以同一张照片永远落在同一个目录，查找仍是 O(1)。
@@ -428,6 +457,51 @@ thumbs/a/b/<16位hash>-viewer2048.webp
 这个结构与 Lightroom 的 `.lrdata` 一致（16 个一级目录 + 十六进制二级目录）。实测 83 个缓存文件摊在 69 个叶子目录里，每个最多 3 个。
 
 没有照搬 LR 的部分：它用**内容指纹**做键（照片改名后预览仍命中），因为它维护的是可任意重排的目录库；我们的键是 `路径+mtime+size`，照片改名就重算，更简单也不会错。它还把 JPEG 内嵌进 `root-pixels.db` 以便原图离线时仍能预览——我们不需要，但代价是数据库从 0.8 MB 涨到百 MB 级。
+
+### 缓存失效与回收
+
+缓存 key 只有两个来源：**源文件身份**（`路径+mtime+size`）和**tag**。所以「改了编码算法但缩略图不更新」这类问题，等价于「tag 没有覆盖所有影响字节的参数」。
+
+tag 因此是自描述的：
+
+```
+<family><edge>q<quality>p<pipelineRevision>
+wall512q78p1   wall842q78p1   zoom2560q82p1   viewer1792q85p1
+```
+
+- `quality` 来自 `THUMB_QUALITY`（wall 78 / zoom 82 / viewer 85）。改质量 → tag 变 → 自动重建。
+- `pipelineRevision`（`THUMB_PIPELINE_REVISION`）覆盖参数表达不了的部分：`rotate → resize → flatten → WebP` 的顺序、输出格式。这类改动要手动 +1。
+- `edge` 覆盖几何变化。
+- 一个 golden key 测试把 `thumbKey('C:\photos\a.jpg', 1700000000000, 123456, 'wall512q78p1')` 的完整结果写死。改了影响字节的东西却没动 tag，CI 直接红。
+
+**孤儿文件**的定义是**自指的**，不看「现在打开了哪个文件夹」：
+
+> 位于 `thumbs/` 下、名字符合本应用命名规则、但 tag 不属于当前构建能读写的任何一种渲染的文件。
+
+不采用 GC 式的「反查引用」，因为一个缓存目录服务用户打开过的**所有**文件夹：按引用清理，打开 B 就会删光 A 的缩略图，跨文件夹复用这一半价值当场消失；移动硬盘暂时离线也会导致合法缓存被清空。
+
+判定用**正向匹配**：只有 `<16位hex>-<tag>.webp` 且 tag 解析后不合法（旧命名 `wall`、`wall842`、旧质量、旧 revision、不可产出的 edge）才删。**认不出来的名字一律保留**并计入统计——「凡我不认识的就删」是清理程序吃掉用户数据的经典路径。
+
+回收分两件事，`main/cache-maintenance.ts` 负责：
+
+| 机制 | 触发 | 行为 |
+|------|------|------|
+| 孤儿清理 | 每次启动 10 秒后后台一次 | 删旧 tag 文件、1 小时以上的 `*.tmp`、空分片目录 |
+| 容量预算 | 设置项 `cacheBudgetMb`（默认 `0` = 不限制） | 超限时按 mtime 从旧到新删到 90%，限流 10 分钟一次 |
+
+保护规则：
+
+- **mtime > 10 分钟**才删（临时文件 1 小时）。这条同时解决并发安全：本会话刚生成的、可能正被 `pic://` 读的文件一定在保护期内。
+- 正在读取的文件 Windows 会返回 `EBUSY`，删除失败静默忽略，下次再试。
+- 只删文件；空目录用 `rmdir`，非空直接失败。最深优先，避免父目录先被判为非空，又避免删掉刚建好还没写文件的目录（同样受时间保护）。
+- 单实例锁保证同一时刻只有一个进程操作缓存，这是能主动清理的根本前提。
+- 整个清扫在 `ready-to-show` 之后延迟启动，不和首屏缩略图抢磁盘。
+
+`0` 只关闭**容量驱逐**；孤儿清理照旧，因为那是正确性问题而不是空间策略。
+
+用量统计只在启动时做一趟带 `stat` 的遍历（同时完成清理），之后由编码回调累加，设置菜单直接读这个近似值。`ready` 为 `false` 时菜单显示「计算中…」而不是误导性的 0。
+
+预算淘汰按 **mtime**（≈ 创建时间）排序。Windows 默认关闭 last-access 时间，真 LRU 需要在首次命中时 `utimes`，属于可选优化，暂不做。
 
 ### 滚轮手势
 
@@ -463,7 +537,7 @@ thumbs/a/b/<16位hash>-viewer2048.webp
 
 ### 文件锁
 
-libvips 会缓存解码结果并持有源文件句柄，导致用户在 Lightroom 里重新导出同名照片时写入失败。`thumbnails.ts` 调用 `sharp.cache(false)` 解决，并有回归测试守护。
+libvips 会缓存解码结果并持有源文件句柄，导致用户在 Lightroom 里重新导出同名照片时写入失败。`main/sharp-loader.ts` 在首次 `import('sharp')` 时调用 `sharp.cache(false)` 解决（`metadata.ts` 与 `thumbnails.ts` 都经由它取用 `sharp`，因此不存在绕过设置的路径），并有回归测试守护。
 
 ### 设置文件 BOM
 
@@ -481,7 +555,7 @@ Windows 编辑器（记事本、PowerShell）会在 UTF-8 文件前加 BOM，`JS
 
 ```bash
 npm run typecheck        # 同时检查 main/preload 与 renderer
-npm run test             # 1102 个单元/集成测试（59 个文件）
+npm run test             # 1162 个单元/集成测试（60 个文件）
 npm run test:coverage    # 覆盖率门槛：70%
 npm run test:e2e         # 38 个 Playwright 端到端测试
 npm run verify           # 以上全部
@@ -520,6 +594,8 @@ src/
 │  ├─ metadata.ts       EXIF 与尺寸解析
 │  ├─ metadata-cache.ts SQLite 元数据缓存
 │  ├─ thumbnails.ts     sharp 缩略图生成 + 双通道编码队列
+│  ├─ sharp-loader.ts   首次使用时才加载 libvips，并关闭其进程级缓存
+│  ├─ cache-maintenance.ts 缓存孤儿清理、容量预算与用量统计
 │  ├─ watcher.ts        fs.watch 封装
 │  ├─ protocol.ts       pic:// 协议（安全边界）
 │  ├─ settings-store.ts 设置读写与校验
