@@ -47,7 +47,7 @@ Good for: skimming a trip you just finished, finding a particular month across s
 
 ## Install and run
 
-Download `PhotoStream-0.2.2-portable-win-x64.zip` from [Releases](https://github.com/sico-sico/PhotoStream/releases), unzip it, and run `PhotoStream.exe`. No installation.
+Download `PhotoStream-0.2.3-portable-win-x64.zip` from [Releases](https://github.com/sico-sico/PhotoStream/releases), unzip it, and run `PhotoStream.exe`. No installation.
 
 The app writes its data to `PhotoStreamData/` beside the exe, so the whole folder can be moved elsewhere or onto a USB drive.
 
@@ -89,8 +89,8 @@ Windows only: the file watcher uses `fs.watch({ recursive: true })`, which Node 
 `.github/workflows/release.yml` is triggered by a tag:
 
 ```bash
-git tag v0.2.2
-git push origin v0.2.2
+git tag v0.2.3
+git push origin v0.2.3
 ```
 
 It re-runs typecheck and the unit tests, packages the build, then launches the packaged exe through `smoke:portable` to check asar path resolution, the unpacked native modules and the `pic://` protocol, and finally attaches the zip to a GitHub Release.

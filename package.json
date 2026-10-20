@@ -1,6 +1,6 @@
 {
   "name": "photostream",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Desktop photo wall: free panning, wheel zoom, filters, single-photo viewer",
   "main": "./out/main/index.js",
   "author": "sico-sico",
