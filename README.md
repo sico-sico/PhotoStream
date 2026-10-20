@@ -72,6 +72,9 @@ npm run verify       # typecheck + 覆盖率测试 + 端到端测试
 | `npm run test` | 单元/集成测试 |
 | `npm run test:coverage` | 单元测试 + 覆盖率（门槛 70%） |
 | `npm run test:e2e` | 编译后运行 Playwright 端到端测试 |
+| `npm run bench` | 性能基准（无头用例，约 1 分钟） |
+| `npm run bench:all` | 加上 4 万张与 Electron 用例（需先 build） |
+| `npm run bench:update` | 把这次基准结果记为新基线 |
 | `npm run verify:library -- "D:\照片目录"` | 用真实照片库跑一遍解析与统计 |
 | `npm run icon` | 由 `build/icon.svg` 重新生成 `icon.ico` / `icon.png` |
 

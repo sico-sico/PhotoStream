@@ -72,6 +72,9 @@ Other scripts:
 | `npm run test` | Unit and integration tests |
 | `npm run test:coverage` | Unit tests with coverage (70% floor) |
 | `npm run test:e2e` | Build, then run the Playwright end-to-end tests |
+| `npm run bench` | Performance benchmarks, headless cases (~1 min) |
+| `npm run bench:all` | Adds the 40,000-photo and Electron cases (build first) |
+| `npm run bench:update` | Record this run as the new baseline |
 | `npm run verify:library -- "D:\photos"` | Run parsing and statistics against a real photo library |
 | `npm run icon` | Regenerate `icon.ico` / `icon.png` from `build/icon.svg` |
 

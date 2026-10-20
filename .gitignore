@@ -15,3 +15,6 @@ coverage/
 
 # Local verification scratch space
 .tmp-e2e-debug/
+
+# Benchmark output (the baseline is committed, the last run is not)
+benchmarks/last.json

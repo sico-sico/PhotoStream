@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const projects = ['tsconfig.node.json', 'tsconfig.web.json']
+const projects = ['tsconfig.node.json', 'tsconfig.web.json', 'tsconfig.scripts.json']
 
 // Resolve the local tsc so the script does not depend on a global install.
 const tsc = join(root, 'node_modules', 'typescript', 'bin', 'tsc')

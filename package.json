@@ -25,7 +25,11 @@
     "dist": "electron-vite build && node scripts/package.mjs",
     "icon": "node scripts/make-icon.mjs",
     "smoke:portable": "node scripts/smoke-portable.mjs release/PhotoStream-portable-win-x64",
-    "verify:library": "node --import tsx scripts/verify-library.ts"
+    "verify:library": "node --import tsx scripts/verify-library.ts",
+    "bench": "node --import tsx scripts/bench/index.ts",
+    "bench:all": "npm run build && node --import tsx scripts/bench/index.ts --large --app",
+    "bench:update": "node --import tsx scripts/bench/index.ts --update",
+    "bench:all:update": "npm run build && node --import tsx scripts/bench/index.ts --large --app --update"
   },
   "dependencies": {
     "exif-reader": "^2.0.3",

@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    // `DOM` is here for the callbacks passed to `page.waitForFunction`: they are
+    // serialised and run inside the renderer, so they legitimately touch
+    // `document`, even though this project is Node.
+    "lib": ["ES2023", "DOM"],
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node"]
+  },
+  "include": ["scripts/**/*.ts"]
+}

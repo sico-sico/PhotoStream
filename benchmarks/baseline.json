@@ -1,0 +1,165 @@
+{
+  "version": 1,
+  "capturedAt": "2026-10-20",
+  "machine": "Intel(R) Core(TM) i9-9900KF CPU @ 3.60GHz · 16 threads · 64 GB",
+  "platform": "win32 x64",
+  "node": "v24.20.0",
+  "samples": 0,
+  "cases": {
+    "parse.jpeg-exif": {
+      "median": 130.58,
+      "min": 119.906,
+      "unit": "µs"
+    },
+    "parse.jpeg-plain": {
+      "median": 96.705,
+      "min": 94.328,
+      "unit": "µs"
+    },
+    "parse.png-plain": {
+      "median": 103.231,
+      "min": 99.738,
+      "unit": "µs"
+    },
+    "parse.jpeg-second-read": {
+      "median": 374.533,
+      "min": 232.041,
+      "unit": "µs"
+    },
+    "exif.full": {
+      "median": 0.601,
+      "min": 0.51,
+      "unit": "ms"
+    },
+    "list.flat-1000": {
+      "median": 0.894,
+      "min": 0.886,
+      "unit": "ms"
+    },
+    "list.recursive-4000": {
+      "median": 5.221,
+      "min": 4.925,
+      "unit": "ms"
+    },
+    "scan.4000.cold": {
+      "median": 355.031,
+      "min": 341.506,
+      "unit": "ms"
+    },
+    "scan.4000.warm": {
+      "median": 68.59,
+      "min": 66.866,
+      "unit": "ms"
+    },
+    "scan.40000.cold": {
+      "median": 4955.175,
+      "min": 4904.834,
+      "unit": "ms"
+    },
+    "scan.40000.warm": {
+      "median": 691.396,
+      "min": 673.393,
+      "unit": "ms"
+    },
+    "cache.storeMany.40000": {
+      "median": 190.915,
+      "min": 188.926,
+      "unit": "ms"
+    },
+    "cache.snapshot.40000": {
+      "median": 79.572,
+      "min": 78.537,
+      "unit": "ms"
+    },
+    "cache.retain.40000": {
+      "median": 59.944,
+      "min": 59.627,
+      "unit": "ms"
+    },
+    "layout.sort.40000": {
+      "median": 34.156,
+      "min": 33.987,
+      "unit": "ms"
+    },
+    "layout.compute.40000.grid": {
+      "median": 1.935,
+      "min": 1.724,
+      "unit": "ms"
+    },
+    "layout.compute.40000.masonry": {
+      "median": 2.271,
+      "min": 1.69,
+      "unit": "ms"
+    },
+    "layout.minScale.40000": {
+      "median": 28.477,
+      "min": 24.562,
+      "unit": "ms"
+    },
+    "layout.cull.40000": {
+      "median": 0.216,
+      "min": 0.185,
+      "unit": "ms"
+    },
+    "filters.apply.40000": {
+      "median": 2.692,
+      "min": 2.628,
+      "unit": "ms"
+    },
+    "thumb.wall.12mp": {
+      "median": 55.632,
+      "min": 54.721,
+      "unit": "ms"
+    },
+    "thumb.zoom.12mp": {
+      "median": 441.104,
+      "min": 440.648,
+      "unit": "ms"
+    },
+    "ipc.encode.40000": {
+      "median": 22.542,
+      "min": 22.432,
+      "unit": "ms"
+    },
+    "ipc.decode.40000": {
+      "median": 22.592,
+      "min": 22.514,
+      "unit": "ms"
+    },
+    "app.startup.empty.window": {
+      "median": 222,
+      "min": 221,
+      "unit": "ms"
+    },
+    "app.startup.empty.dom": {
+      "median": 253,
+      "min": 252,
+      "unit": "ms"
+    },
+    "app.startup.empty.rss": {
+      "median": 94,
+      "min": 94,
+      "unit": "MB"
+    },
+    "app.startup.restore.firstTile": {
+      "median": 476,
+      "min": 472,
+      "unit": "ms"
+    },
+    "app.startup.restore.firstImage": {
+      "median": 521,
+      "min": 509,
+      "unit": "ms"
+    },
+    "app.open.warm.firstTile": {
+      "median": 537,
+      "min": 534,
+      "unit": "ms"
+    },
+    "app.open.cold.firstTile": {
+      "median": 1198,
+      "min": 1155,
+      "unit": "ms"
+    }
+  }
+}
